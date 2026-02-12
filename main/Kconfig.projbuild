@@ -1,0 +1,39 @@
+menu "Locator Configuration"
+
+    config LOCATOR_SCAN_INTERVAL_SEC
+        int "Deep sleep scan interval (seconds)"
+        default 30
+        range 10 3600
+        help
+            Interval between WiFi scans during deep sleep cycles.
+
+    config LOCATOR_MAX_STORED_SCANS
+        int "Maximum stored scans in NVS"
+        default 50
+        range 10 200
+        help
+            Maximum number of scan records stored in NVS.
+            Oldest scans are evicted when this limit is reached.
+
+    config LOCATOR_MAX_APS_PER_SCAN
+        int "Maximum APs per scan"
+        default 20
+        range 5 30
+        help
+            Maximum number of access points to record per scan.
+
+    config LOCATOR_BOOT_BUTTON_GPIO
+        int "Boot button GPIO number"
+        default 0
+        help
+            GPIO number for the boot button used to enter web server mode.
+            Default is 0 for ESP32, use 9 for ESP32-C3/C6.
+
+    config LOCATOR_LED_GPIO
+        int "Board LED GPIO number"
+        default 2
+        help
+            GPIO number for the onboard LED. Lit when web server is running.
+            Default is 2 for most ESP32 devkits.
+
+endmenu

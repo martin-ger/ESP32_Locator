@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Locator</title>
+<link rel="icon" type="image/png" href="/favicon.ico?v=2">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Share Tech Mono','Courier New',monospace;background:#000;color:#00ff41;max-width:860px;margin:0 auto;padding:16px;
+  background-image:repeating-linear-gradient(0deg,rgba(0,255,65,.03) 0px,rgba(0,255,65,.03) 1px,transparent 1px,transparent 3px);
+  min-height:100vh}
+h1{font-size:1.5em;color:#00ff41;margin-bottom:4px;text-shadow:0 0 10px #00ff41,0 0 20px #00ff4180;letter-spacing:3px}
+.subtitle{color:#008f11;font-size:.75em;margin-bottom:12px;letter-spacing:2px}
+h2{font-size:1.1em;color:#00ff41;margin-bottom:8px;text-shadow:0 0 8px #00ff4160}
+nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #003b00;padding-bottom:12px}
+nav button{background:transparent;border:1px solid #003b00;color:#008f11;padding:6px 16px;cursor:pointer;font-family:inherit;font-size:.85em;text-transform:uppercase;letter-spacing:1px;transition:all .2s}
+nav button:hover{border-color:#00ff41;color:#00ff41;text-shadow:0 0 8px #00ff41;box-shadow:0 0 8px #00ff4130}
+nav button.active{border-color:#00ff41;color:#00ff41;background:#00ff4110;text-shadow:0 0 8px #00ff41}
+.view{display:none}
+.view.active{display:block;animation:fadeIn .3s}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:.82em}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid #003b00}
+th{background:#001a00;color:#00ff41;text-transform:uppercase;letter-spacing:1px;font-size:.8em;position:sticky;top:0}
+tr:hover{background:#00ff4108}
+td{color:#00cc33}
+button{background:transparent;border:1px solid #003b00;color:#008f11;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:.82em;transition:all .2s}
+button:hover{border-color:#00ff41;color:#00ff41;text-shadow:0 0 5px #00ff41}
+button.danger{border-color:#3b0000;color:#ff4141}
+button.danger:hover{border-color:#ff4141;color:#ff4141;text-shadow:0 0 5px #ff4141}
+button.go{border-color:#003b00;color:#00ff41;background:#00ff4115;text-shadow:0 0 5px #00ff4180}
+button.go:hover{background:#00ff4125;box-shadow:0 0 12px #00ff4130}
+input[type=text],input[type=password]{background:#001a00;border:1px solid #003b00;color:#00ff41;padding:6px 10px;width:100%;max-width:420px;font-family:inherit;font-size:.9em;transition:border-color .2s}
+input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#00ff41;box-shadow:0 0 8px #00ff4130}
+input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
+.msg{padding:8px 12px;margin:8px 0;font-size:.85em;border:1px solid}
+.msg.ok{border-color:#003b00;color:#00ff41;background:#00ff4110}
+.msg.err{border-color:#3b0000;color:#ff4141;background:#ff414110}
+.bar{height:5px;background:#001a00;overflow:hidden;margin:4px 0;border:1px solid #003b0050}
+.bar .fill{height:100%;transition:width .3s}
+#map-frame{width:100%;height:400px;border:1px solid #003b00;background:#000}
+.info{color:#006600;font-size:.82em;margin:4px 0}
+.cursor{display:inline-block;width:8px;height:1.1em;background:#00ff41;animation:blink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+.glow{text-shadow:0 0 10px #00ff41,0 0 20px #00ff4140}
+.panel{border:1px solid #003b00;padding:12px;margin:8px 0;background:#00110a08}
+.tag{display:inline-block;padding:1px 6px;border:1px solid #003b00;font-size:.75em;color:#008f11;margin:0 2px}
+</style>
+</head>
+<body>
+<h1>ESP32_LOCATOR<span class="cursor"></span></h1>
+<div class="subtitle">// WiFi reconnaissance & geolocation system</div>
+<nav>
+<button onclick="showView('scans')" id="nav-scans">[ Scans ]</button>
+<button onclick="showView('settings')" id="nav-settings">[ Config ]</button>
+<button onclick="startScanning()" class="go" style="margin-left:auto">[ Start Scanning ]</button>
+</nav>
+
+<div id="v-scans" class="view active">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<h2>&gt; stored_scans</h2>
+<div><button onclick="loadScans()">Refresh</button> <button class="danger" onclick="deleteAll()">Purge All</button></div>
+</div>
+<div id="scan-list"></div>
+</div>
+
+<div id="v-detail" class="view">
+<button onclick="showView('scans')" style="margin-bottom:10px">&lt; back</button>
+<h2>&gt; scan_data [<span id="detail-id"></span>]</h2>
+<p class="info" id="detail-time"></p>
+<div id="detail-aps"></div>
+</div>
+
+<div id="v-map" class="view">
+<button onclick="showView('scans')" style="margin-bottom:10px">&lt; back</button>
+<h2>&gt; location [<span id="map-id"></span>]</h2>
+<div class="panel" id="map-info" style="margin-bottom:8px"></div>
+<iframe id="map-frame" frameborder="0" allowfullscreen></iframe>
+</div>
+
+<div id="v-settings" class="view">
+<h2>&gt; configuration</h2>
+<div class="panel">
+<label class="info">GOOGLE_API_KEY</label>
+<div style="margin-top:4px">
+<input type="password" id="api-key" placeholder="enter_api_key" autocomplete="off">
+</div>
+<label class="info" style="margin-top:14px;display:block">SCAN_INTERVAL_SEC</label>
+<div style="display:flex;gap:8px;margin-top:4px;align-items:center">
+<input type="text" id="scan-interval" placeholder="60" style="max-width:120px">
+<span class="info">range: 10-3600</span>
+</div>
+<div style="margin-top:14px"><button class="go" onclick="saveSettings()">[ Save ]</button></div>
+<div id="settings-msg"></div>
+</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const views = ['scans','detail','map','settings'];
+
+function showView(v) {
+  views.forEach(n => {
+    const el = document.getElementById('v-'+n);
+    if(el) el.classList.toggle('active', n===v);
+    const nb = document.getElementById('nav-'+n);
+    if(nb) nb.classList.toggle('active', n===v);
+  });
+  if(v==='scans') loadScans();
+  if(v==='settings') loadSettings();
+}
+
+function ts(epoch) {
+  if(!epoch) return '<span class="tag">NO_TIMESTAMP</span>';
+  return new Date(epoch*1000).toLocaleString();
+}
+
+function rssiBar(rssi) {
+  const pct = Math.max(0, Math.min(100, (rssi+100)*2));
+  const color = pct>60?'#00ff41':pct>30?'#ffaa00':'#ff4141';
+  return `<div class="bar" style="width:60px;display:inline-block"><div class="fill" style="width:${pct}%;background:${color}"></div></div> ${rssi}dBm`;
+}
+
+async function loadScans() {
+  const r = await fetch('/api/scans');
+  const data = await r.json();
+  if(!data.length) {
+    $('#scan-list').innerHTML = '<div class="panel"><span class="info">No scan records found.</span></div>';
+    return;
+  }
+  let h = '<table><tr><th>idx</th><th>timestamp</th><th>aps</th><th>diffs</th><th>actions</th></tr>';
+  data.forEach(s => {
+    const d = s.diffs !== undefined ? s.diffs : '-';
+    const dclass = (s.diffs !== undefined && s.diffs > s.aps / 2) ? ' style="color:#ff4141;text-shadow:0 0 5px #ff4141"' : '';
+    h += `<tr><td>${String(s.id).padStart(5,'0')}</td><td>${ts(s.timestamp)}</td><td>${s.aps}</td><td${dclass}>${d}</td><td>
+      <button onclick="viewScan(${s.id})">View</button>
+      <button onclick="locateScan(${s.id})">Locate</button>
+      <button class="danger" onclick="deleteScan(${s.id})">Del</button></td></tr>`;
+  });
+  h += '</table>';
+  $('#scan-list').innerHTML = h;
+}
+
+async function viewScan(id) {
+  const r = await fetch('/api/scan?id='+id);
+  const data = await r.json();
+  $('#detail-id').textContent = String(id).padStart(5,'0');
+  $('#detail-time').innerHTML = 'timestamp: ' + ts(data.timestamp);
+  let h = '<table><tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Ch</th><th>Auth</th></tr>';
+  data.aps.forEach(a => {
+    h += `<tr><td>${a.ssid||'<span class="info">&lt;hidden&gt;</span>'}</td><td>${a.bssid}</td>
+      <td>${rssiBar(a.rssi)}</td><td>${a.channel}</td><td><span class="tag">${a.auth}</span></td></tr>`;
+  });
+  h += '</table>';
+  $('#detail-aps').innerHTML = h;
+  showView('detail');
+}
+
+async function locateScan(id) {
+  showView('map');
+  $('#map-id').textContent = String(id).padStart(5,'0');
+  $('#map-info').innerHTML = '<span class="glow">Requesting geolocation...</span><span class="cursor"></span>';
+  $('#map-frame').src = '';
+  try {
+    const r = await fetch('/api/locate?id='+id, {method:'POST'});
+    if(!r.ok) { $('#map-info').innerHTML = `<span class="msg err">ERR: ${await r.text()}</span>`; return; }
+    const loc = await r.json();
+    $('#map-info').innerHTML = `LAT: ${loc.lat.toFixed(6)} &nbsp; LNG: ${loc.lng.toFixed(6)} &nbsp; ACC: ${loc.accuracy.toFixed(0)}m`;
+    const sr = await fetch('/api/settings');
+    const settings = await sr.json();
+    if(settings.api_key) {
+      $('#map-frame').src = `https://www.google.com/maps/embed/v1/place?key=${settings.api_key}&q=${loc.lat},${loc.lng}&zoom=16`;
+    } else {
+      $('#map-info').innerHTML += '<br><span class="info">Set API key in Config to render map.</span>';
+    }
+  } catch(e) {
+    $('#map-info').innerHTML = `<span class="msg err">CONNECTION_FAILED: ${e.message}</span>`;
+  }
+}
+
+async function deleteScan(id) {
+  if(!confirm('ERASE scan #'+id+'?')) return;
+  await fetch('/api/scan?id='+id, {method:'DELETE'});
+  loadScans();
+}
+
+async function deleteAll() {
+  if(!confirm('PURGE all scan records from NVS?')) return;
+  await fetch('/api/scans', {method:'DELETE'});
+  loadScans();
+}
+
+async function loadSettings() {
+  const r = await fetch('/api/settings');
+  const data = await r.json();
+  $('#api-key').value = data.api_key || '';
+  $('#scan-interval').value = data.scan_interval || 60;
+}
+
+async function saveSettings() {
+  const key = $('#api-key').value.trim();
+  const ivl = parseInt($('#scan-interval').value) || 60;
+  if (ivl < 10 || ivl > 3600) {
+    $('#settings-msg').innerHTML = '<p class="msg err">WARN: scan interval must be 10-3600 seconds</p>';
+    setTimeout(() => $('#settings-msg').innerHTML = '', 4000);
+    return;
+  }
+  const r = await fetch('/api/settings', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_key:key, scan_interval:ivl})
+  });
+  $('#settings-msg').innerHTML = r.ok
+    ? '<p class="msg ok">CONFIG_SAVED</p>'
+    : '<p class="msg err">WRITE_FAILED</p>';
+  setTimeout(() => $('#settings-msg').innerHTML = '', 3000);
+}
+
+async function startScanning() {
+  const ivl = $('#scan-interval')?.value || '60';
+  if(!confirm(`ENTER SCAN MODE?\n\nInterval: ${ivl}s\nWiFi will disconnect.\nPress BOOT to return.`)) return;
+  await fetch('/api/sleep', {method:'POST'});
+  document.body.innerHTML = '<div style="text-align:center;margin-top:80px"><h1 class="glow" style="font-size:1.8em">ENTERING DEEP SLEEP<span class="cursor"></span></h1><p style="color:#008f11;margin-top:16px;letter-spacing:2px">// scanning active &mdash; press BOOT to wake</p></div>';
+}
+
+loadScans();
+</script>
+</body>
+</html>
