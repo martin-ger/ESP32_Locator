@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "scan_store.h"
 #include "geolocation.h"
+#include "wifi_connect.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include <string.h>
@@ -92,11 +93,6 @@ static esp_err_t api_scans_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    int64_t time_base;
-    uint16_t time_base_idx;
-    scan_store_get_time_base(&time_base, &time_base_idx);
-    uint16_t interval = scan_store_get_scan_interval();
-
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send_chunk(req, "[", 1);
 
@@ -105,7 +101,7 @@ static esp_err_t api_scans_get_handler(httpd_req_t *req)
     uint8_t prev_count = 0;
     bool has_prev = false;
     bool first = true;
-    char chunk[128];
+    char chunk[256];
 
     for (uint16_t i = head; i < count; i++) {
         stored_ap_t tmp_aps[CONFIG_LOCATOR_MAX_APS_PER_SCAN];
@@ -124,20 +120,25 @@ static esp_err_t api_scans_get_handler(httpd_req_t *req)
         }
 
         int64_t timestamp = 0;
-        if (time_base > 0) {
-            timestamp = time_base + (int64_t)(i - time_base_idx) * interval;
+        scan_store_get_scan_info(i, NULL, &timestamp);
+
+        int len = snprintf(chunk, sizeof(chunk),
+                           "%s{\"id\":%u,\"aps\":%u,\"timestamp\":%lld",
+                           first ? "" : ",", i, ap_count, (long long)timestamp);
+
+        if (diffs >= 0) {
+            len += snprintf(chunk + len, sizeof(chunk) - len, ",\"diffs\":%d", diffs);
         }
 
-        int len;
-        if (diffs >= 0) {
-            len = snprintf(chunk, sizeof(chunk),
-                           "%s{\"id\":%u,\"aps\":%u,\"timestamp\":%lld,\"diffs\":%d}",
-                           first ? "" : ",", i, ap_count, (long long)timestamp, diffs);
-        } else {
-            len = snprintf(chunk, sizeof(chunk),
-                           "%s{\"id\":%u,\"aps\":%u,\"timestamp\":%lld}",
-                           first ? "" : ",", i, ap_count, (long long)timestamp);
+        // Include cached location if available
+        scan_location_t loc;
+        if (scan_store_get_location(i, &loc) == ESP_OK) {
+            len += snprintf(chunk + len, sizeof(chunk) - len,
+                            ",\"lat\":%.6f,\"lng\":%.6f,\"accuracy\":%.0f",
+                            loc.lat, loc.lng, loc.accuracy);
         }
+
+        len += snprintf(chunk + len, sizeof(chunk) - len, "}");
         httpd_resp_send_chunk(req, chunk, len);
         first = false;
 
@@ -188,13 +189,8 @@ static esp_err_t api_scan_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    int64_t time_base;
-    uint16_t time_base_idx;
-    scan_store_get_time_base(&time_base, &time_base_idx);
     int64_t timestamp = 0;
-    if (time_base > 0) {
-        timestamp = time_base + (int64_t)(id - time_base_idx) * scan_store_get_scan_interval();
-    }
+    scan_store_get_scan_info(id, NULL, &timestamp);
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "id", id);
@@ -217,6 +213,15 @@ static esp_err_t api_scan_get_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(ap, "channel", aps[i].channel);
         cJSON_AddStringToObject(ap, "auth", authmode_str(aps[i].authmode));
         cJSON_AddItemToArray(arr, ap);
+    }
+
+    // Include cached location if available
+    scan_location_t loc;
+    if (scan_store_get_location(id, &loc) == ESP_OK) {
+        cJSON *location = cJSON_AddObjectToObject(root, "location");
+        cJSON_AddNumberToObject(location, "lat", loc.lat);
+        cJSON_AddNumberToObject(location, "lng", loc.lng);
+        cJSON_AddNumberToObject(location, "accuracy", loc.accuracy);
     }
 
     char *json = cJSON_PrintUnformatted(root);
@@ -258,7 +263,7 @@ static esp_err_t api_scan_delete_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// POST /api/locate?id=N — geolocate a scan
+// POST /api/locate?id=N — geolocate a scan (cached in NVS after first call)
 static esp_err_t api_locate_handler(httpd_req_t *req)
 {
     char buf[16];
@@ -273,35 +278,57 @@ static esp_err_t api_locate_handler(httpd_req_t *req)
     }
     uint16_t id = (uint16_t)atoi(id_str);
 
-    // Load scan
-    stored_ap_t aps[CONFIG_LOCATOR_MAX_APS_PER_SCAN];
-    uint8_t ap_count = 0;
-    esp_err_t err = scan_store_load(id, aps, CONFIG_LOCATOR_MAX_APS_PER_SCAN, &ap_count);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Scan not found");
-        return ESP_OK;
-    }
+    double lat, lng, accuracy;
+    bool cached = false;
 
-    // Get API key
-    char api_key[129];
-    err = scan_store_get_api_key(api_key, sizeof(api_key));
-    if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No API key configured");
-        return ESP_OK;
-    }
+    // Check NVS cache first
+    scan_location_t loc;
+    if (scan_store_get_location(id, &loc) == ESP_OK) {
+        lat = loc.lat;
+        lng = loc.lng;
+        accuracy = loc.accuracy;
+        cached = true;
+        ESP_LOGI(TAG, "Location for scan %u served from cache", id);
+    } else {
+        // Load scan
+        stored_ap_t aps[CONFIG_LOCATOR_MAX_APS_PER_SCAN];
+        uint8_t ap_count = 0;
+        esp_err_t err = scan_store_load(id, aps, CONFIG_LOCATOR_MAX_APS_PER_SCAN, &ap_count);
+        if (err != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Scan not found");
+            return ESP_OK;
+        }
 
-    // Call Google API
-    geolocation_result_t result;
-    err = geolocation_request(api_key, aps, ap_count, &result);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Geolocation failed");
-        return ESP_OK;
+        // Get API key
+        char api_key[129];
+        err = scan_store_get_api_key(api_key, sizeof(api_key));
+        if (err != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No API key configured");
+            return ESP_OK;
+        }
+
+        // Call Google API
+        geolocation_result_t result;
+        err = geolocation_request(api_key, aps, ap_count, &result);
+        if (err != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Geolocation failed");
+            return ESP_OK;
+        }
+
+        lat = result.lat;
+        lng = result.lng;
+        accuracy = result.accuracy;
+
+        // Cache in NVS
+        scan_store_save_location(id, lat, lng, accuracy);
+        ESP_LOGI(TAG, "Location for scan %u cached to NVS", id);
     }
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddNumberToObject(resp, "lat", result.lat);
-    cJSON_AddNumberToObject(resp, "lng", result.lng);
-    cJSON_AddNumberToObject(resp, "accuracy", result.accuracy);
+    cJSON_AddNumberToObject(resp, "lat", lat);
+    cJSON_AddNumberToObject(resp, "lng", lng);
+    cJSON_AddNumberToObject(resp, "accuracy", accuracy);
+    cJSON_AddBoolToObject(resp, "cached", cached);
 
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
@@ -398,6 +425,103 @@ static esp_err_t api_sleep_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// GET /api/wifi/status — current WiFi mode, IP, SSID
+static esp_err_t api_wifi_status_handler(httpd_req_t *req)
+{
+    cJSON *resp = cJSON_CreateObject();
+
+    wifi_conn_mode_t mode = wifi_connect_get_mode();
+    cJSON_AddStringToObject(resp, "mode", mode == WIFI_CONN_MODE_STA ? "STA" : "AP");
+
+    char ip[16];
+    wifi_connect_get_ip_str(ip, sizeof(ip));
+    cJSON_AddStringToObject(resp, "ip", ip);
+
+    char ssid[33] = {0};
+    if (mode == WIFI_CONN_MODE_STA) {
+        scan_store_get_wifi_ssid(ssid, sizeof(ssid));
+    }
+    cJSON_AddStringToObject(resp, "ssid", ssid);
+
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON error");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_OK;
+}
+
+// GET /api/wifi/scan — scan for nearby networks
+static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
+{
+    char *json = wifi_connect_scan_networks();
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_OK;
+}
+
+// POST /api/wifi/connect — save credentials and reboot
+static esp_err_t api_wifi_connect_handler(httpd_req_t *req)
+{
+    char body[256];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_OK;
+    }
+    body[received] = '\0';
+
+    cJSON *json = cJSON_Parse(body);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_OK;
+    }
+
+    cJSON *ssid = cJSON_GetObjectItem(json, "ssid");
+    cJSON *pass = cJSON_GetObjectItem(json, "password");
+    if (!ssid || !cJSON_IsString(ssid) || ssid->valuestring[0] == '\0') {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing SSID");
+        return ESP_OK;
+    }
+
+    char ssid_buf[33];
+    char pass_buf[65];
+    strncpy(ssid_buf, ssid->valuestring, sizeof(ssid_buf) - 1);
+    ssid_buf[sizeof(ssid_buf) - 1] = '\0';
+    strncpy(pass_buf, (pass && cJSON_IsString(pass)) ? pass->valuestring : "", sizeof(pass_buf) - 1);
+    pass_buf[sizeof(pass_buf) - 1] = '\0';
+
+    cJSON_Delete(json);
+
+    // Send response before rebooting
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"msg\":\"Connecting, device will reboot...\"}");
+
+    // This saves creds and reboots
+    wifi_connect_sta(ssid_buf, pass_buf);
+    return ESP_OK;
+}
+
+// POST /api/wifi/forget — clear credentials and reboot to AP mode
+static esp_err_t api_wifi_forget_handler(httpd_req_t *req)
+{
+    scan_store_clear_wifi_creds();
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"msg\":\"Credentials cleared, rebooting to AP mode...\"}");
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 static const httpd_uri_t uri_index = {
     .uri = "/", .method = HTTP_GET, .handler = index_get_handler
 };
@@ -428,12 +552,24 @@ static const httpd_uri_t uri_settings_post = {
 static const httpd_uri_t uri_sleep = {
     .uri = "/api/sleep", .method = HTTP_POST, .handler = api_sleep_handler
 };
+static const httpd_uri_t uri_wifi_status = {
+    .uri = "/api/wifi/status", .method = HTTP_GET, .handler = api_wifi_status_handler
+};
+static const httpd_uri_t uri_wifi_scan = {
+    .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = api_wifi_scan_handler
+};
+static const httpd_uri_t uri_wifi_connect = {
+    .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = api_wifi_connect_handler
+};
+static const httpd_uri_t uri_wifi_forget = {
+    .uri = "/api/wifi/forget", .method = HTTP_POST, .handler = api_wifi_forget_handler
+};
 
 httpd_handle_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.stack_size = 10240;  // TLS handshake for Google API needs extra stack
 
     httpd_handle_t server = NULL;
@@ -454,6 +590,10 @@ httpd_handle_t web_server_start(void)
     httpd_register_uri_handler(server, &uri_settings_get);
     httpd_register_uri_handler(server, &uri_settings_post);
     httpd_register_uri_handler(server, &uri_sleep);
+    httpd_register_uri_handler(server, &uri_wifi_status);
+    httpd_register_uri_handler(server, &uri_wifi_scan);
+    httpd_register_uri_handler(server, &uri_wifi_connect);
+    httpd_register_uri_handler(server, &uri_wifi_forget);
 
     ESP_LOGI(TAG, "Web server started");
     return server;

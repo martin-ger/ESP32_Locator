@@ -61,9 +61,9 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <div id="v-scans" class="view active">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
 <h2>&gt; stored_scans</h2>
-<div><button onclick="loadScans()">Refresh</button> <button class="danger" onclick="deleteAll()">Purge All</button></div>
+<div><button onclick="exportScans()">Export</button> <button class="danger" onclick="deleteAll()">Purge All</button></div>
 </div>
-<div id="scan-list"></div>
+<div id="scan-list" class="panel"></div>
 </div>
 
 <div id="v-detail" class="view">
@@ -71,6 +71,7 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <h2>&gt; scan_data [<span id="detail-id"></span>]</h2>
 <p class="info" id="detail-time"></p>
 <div id="detail-aps"></div>
+<div id="detail-nav" style="display:flex;justify-content:space-between;margin-top:10px"></div>
 </div>
 
 <div id="v-map" class="view">
@@ -78,10 +79,28 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <h2>&gt; location [<span id="map-id"></span>]</h2>
 <div class="panel" id="map-info" style="margin-bottom:8px"></div>
 <iframe id="map-frame" frameborder="0" allowfullscreen></iframe>
+<div id="map-nav" style="display:flex;justify-content:space-between;margin-top:10px"></div>
 </div>
 
 <div id="v-settings" class="view">
 <h2>&gt; configuration</h2>
+<div class="panel">
+<label class="info">WIFI_CONNECTION</label>
+<div id="wifi-status" style="margin:6px 0;font-size:.85em"></div>
+<div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+<input type="text" id="wifi-ssid" placeholder="SSID" style="max-width:240px" autocomplete="off">
+<button onclick="scanWifi()">Scan</button>
+</div>
+<div id="wifi-scan-results" style="margin:6px 0"></div>
+<div style="margin-top:6px">
+<input type="password" id="wifi-pass" placeholder="password" style="max-width:240px" autocomplete="off">
+</div>
+<div style="margin-top:10px;display:flex;gap:8px">
+<button class="go" onclick="connectWifi()">[ Connect ]</button>
+<button class="danger" onclick="forgetWifi()">[ Forget ]</button>
+</div>
+<div id="wifi-msg"></div>
+</div>
 <div class="panel">
 <label class="info">GOOGLE_API_KEY</label>
 <div style="margin-top:4px">
@@ -100,6 +119,7 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <script>
 const $ = s => document.querySelector(s);
 const views = ['scans','detail','map','settings'];
+let scanIds = [];
 
 function showView(v) {
   views.forEach(n => {
@@ -123,24 +143,69 @@ function rssiBar(rssi) {
   return `<div class="bar" style="width:60px;display:inline-block"><div class="fill" style="width:${pct}%;background:${color}"></div></div> ${rssi}dBm`;
 }
 
+function haversine(lat1, lon1, lat2, lon2) {
+  const r = 6371.0;
+  const dLat = (lat2 - lat1) * Math.PI / 180.0;
+  const dLon = (lon2 - lon1) * Math.PI / 180.0;
+  const la1 = lat1 * Math.PI / 180.0;
+  const la2 = lat2 * Math.PI / 180.0;
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return r * c;
+}
+
+function fmtDist(km) {
+  if (km < 1) return Math.round(km * 1000) + 'm';
+  return km.toFixed(2) + 'km';
+}
+
+let scanData = [];
+
 async function loadScans() {
   const r = await fetch('/api/scans');
   const data = await r.json();
+  scanData = data;
+  scanIds = data.map(s => s.id);
   if(!data.length) {
     $('#scan-list').innerHTML = '<div class="panel"><span class="info">No scan records found.</span></div>';
     return;
   }
-  let h = '<table><tr><th>idx</th><th>timestamp</th><th>aps</th><th>diffs</th><th>actions</th></tr>';
+  // Compute distances between consecutively located scans
+  let prevLoc = null;
+  const distances = {};
+  data.forEach(s => {
+    if (s.lat !== undefined) {
+      if (prevLoc) {
+        distances[s.id] = haversine(prevLoc.lat, prevLoc.lng, s.lat, s.lng);
+      }
+      prevLoc = { lat: s.lat, lng: s.lng };
+    }
+  });
+
+  let h = '<table><tr><th>idx</th><th>timestamp</th><th>aps</th><th>diffs</th><th>dist</th><th>actions</th></tr>';
   data.forEach(s => {
     const d = s.diffs !== undefined ? s.diffs : '-';
     const dclass = (s.diffs !== undefined && s.diffs > s.aps / 2) ? ' style="color:#ff4141;text-shadow:0 0 5px #ff4141"' : '';
-    h += `<tr><td>${String(s.id).padStart(5,'0')}</td><td>${ts(s.timestamp)}</td><td>${s.aps}</td><td${dclass}>${d}</td><td>
+    const located = s.lat !== undefined;
+    const locBtn = located ? '<button onclick="locateScan('+s.id+')" style="font-weight:bold;border-color:#00ff41;color:#00ff41">Locate</button>' : '<button onclick="locateScan('+s.id+')">Locate</button>';
+    const dist = distances[s.id] !== undefined ? fmtDist(distances[s.id]) : '-';
+    h += `<tr><td>${String(s.id).padStart(5,'0')}</td><td>${ts(s.timestamp)}</td><td>${s.aps}</td><td${dclass}>${d}</td><td>${dist}</td><td>
       <button onclick="viewScan(${s.id})">View</button>
-      <button onclick="locateScan(${s.id})">Locate</button>
+      ${locBtn}
       <button class="danger" onclick="deleteScan(${s.id})">Del</button></td></tr>`;
   });
   h += '</table>';
   $('#scan-list').innerHTML = h;
+}
+
+function navButtons(id, fn, midBtn) {
+  const idx = scanIds.indexOf(id);
+  const prev = idx > 0 ? scanIds[idx-1] : null;
+  const next = idx < scanIds.length-1 ? scanIds[idx+1] : null;
+  let h = prev !== null ? `<button onclick="${fn}(${prev})">&lt; Prev</button>` : '<span></span>';
+  h += midBtn || '';
+  h += next !== null ? `<button onclick="${fn}(${next})">Next &gt;</button>` : '<span></span>';
+  return h;
 }
 
 async function viewScan(id) {
@@ -155,6 +220,7 @@ async function viewScan(id) {
   });
   h += '</table>';
   $('#detail-aps').innerHTML = h;
+  $('#detail-nav').innerHTML = navButtons(id, 'viewScan', `<button onclick="locateScan(${id})">Locate</button>`);
   showView('detail');
 }
 
@@ -167,7 +233,8 @@ async function locateScan(id) {
     const r = await fetch('/api/locate?id='+id, {method:'POST'});
     if(!r.ok) { $('#map-info').innerHTML = `<span class="msg err">ERR: ${await r.text()}</span>`; return; }
     const loc = await r.json();
-    $('#map-info').innerHTML = `LAT: ${loc.lat.toFixed(6)} &nbsp; LNG: ${loc.lng.toFixed(6)} &nbsp; ACC: ${loc.accuracy.toFixed(0)}m`;
+    const cachedTag = loc.cached ? ' <span class="tag">CACHED</span>' : ' <span class="tag" style="border-color:#00ff41;color:#00ff41">NEW</span>';
+    $('#map-info').innerHTML = `LAT: ${loc.lat.toFixed(6)} &nbsp; LNG: ${loc.lng.toFixed(6)} &nbsp; ACC: ${loc.accuracy.toFixed(0)}m${cachedTag}`;
     const sr = await fetch('/api/settings');
     const settings = await sr.json();
     if(settings.api_key) {
@@ -175,9 +242,14 @@ async function locateScan(id) {
     } else {
       $('#map-info').innerHTML += '<br><span class="info">Set API key in Config to render map.</span>';
     }
+    // Refresh scan list in background so overview picks up new location data
+    if (!loc.cached) {
+      fetch('/api/scans').then(r=>r.json()).then(d=>{ scanData=d; scanIds=d.map(s=>s.id); });
+    }
   } catch(e) {
     $('#map-info').innerHTML = `<span class="msg err">CONNECTION_FAILED: ${e.message}</span>`;
   }
+  $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
 }
 
 async function deleteScan(id) {
@@ -192,11 +264,102 @@ async function deleteAll() {
   loadScans();
 }
 
+async function exportScans() {
+  const r = await fetch('/api/scans');
+  const list = await r.json();
+  if(!list.length) { alert('No scans to export.'); return; }
+  const scans = [];
+  for(const s of list) {
+    const dr = await fetch('/api/scan?id='+s.id);
+    scans.push(await dr.json());
+  }
+  // Filename: LocatorScan_ + date/time of first scan
+  const firstTs = list[0].timestamp;
+  let dtStr;
+  if (firstTs) {
+    const d = new Date(firstTs * 1000);
+    dtStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')
+      + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0');
+  } else {
+    dtStr = new Date().toISOString().slice(0,10);
+  }
+  const blob = new Blob([JSON.stringify(scans, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'LocatorScan_' + dtStr + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 async function loadSettings() {
   const r = await fetch('/api/settings');
   const data = await r.json();
   $('#api-key').value = data.api_key || '';
   $('#scan-interval').value = data.scan_interval || 60;
+  loadWifiStatus();
+}
+
+async function loadWifiStatus() {
+  try {
+    const r = await fetch('/api/wifi/status');
+    const d = await r.json();
+    const modeTag = d.mode === 'STA'
+      ? '<span class="tag" style="border-color:#00ff41;color:#00ff41">STA</span>'
+      : '<span class="tag" style="border-color:#ffaa00;color:#ffaa00">AP</span>';
+    const ssidInfo = d.ssid ? ` &nbsp; SSID: ${d.ssid}` : '';
+    $('#wifi-status').innerHTML = `${modeTag} &nbsp; IP: ${d.ip}${ssidInfo}`;
+  } catch(e) {
+    $('#wifi-status').innerHTML = '<span class="info">STATUS_UNAVAILABLE</span>';
+  }
+}
+
+async function scanWifi() {
+  $('#wifi-scan-results').innerHTML = '<span class="info">Scanning...</span><span class="cursor"></span>';
+  try {
+    const r = await fetch('/api/wifi/scan');
+    const nets = await r.json();
+    if(!nets.length) {
+      $('#wifi-scan-results').innerHTML = '<span class="info">No networks found.</span>';
+      return;
+    }
+    let h = '<table><tr><th>SSID</th><th>Signal</th><th>Auth</th><th>Ch</th><th></th></tr>';
+    nets.forEach(n => {
+      h += `<tr><td>${n.ssid}</td><td>${rssiBar(n.rssi)}</td><td><span class="tag">${n.auth}</span></td><td>${n.channel}</td>
+        <td><button onclick="selectNet('${n.ssid.replace(/'/g,"\\'")}')">Select</button></td></tr>`;
+    });
+    h += '</table>';
+    $('#wifi-scan-results').innerHTML = h;
+  } catch(e) {
+    $('#wifi-scan-results').innerHTML = '<span class="msg err">SCAN_FAILED</span>';
+  }
+}
+
+function selectNet(ssid) {
+  $('#wifi-ssid').value = ssid;
+  $('#wifi-pass').focus();
+}
+
+async function connectWifi() {
+  const ssid = $('#wifi-ssid').value.trim();
+  if(!ssid) { $('#wifi-msg').innerHTML = '<p class="msg err">SSID required</p>'; return; }
+  const pass = $('#wifi-pass').value;
+  if(!confirm(`Connect to "${ssid}"?\nDevice will reboot.`)) return;
+  $('#wifi-msg').innerHTML = '<p class="msg ok">Saving credentials and rebooting...<span class="cursor"></span></p>';
+  try {
+    await fetch('/api/wifi/connect', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ssid, password:pass})
+    });
+  } catch(e) { /* device reboots, connection drops — expected */ }
+}
+
+async function forgetWifi() {
+  if(!confirm('Forget WiFi credentials?\nDevice will reboot to AP mode.')) return;
+  $('#wifi-msg').innerHTML = '<p class="msg ok">Clearing credentials...<span class="cursor"></span></p>';
+  try {
+    await fetch('/api/wifi/forget', {method:'POST'});
+  } catch(e) { /* reboot expected */ }
 }
 
 async function saveSettings() {

@@ -1,4 +1,4 @@
 # Name,    Type, SubType, Offset,  Size
-nvs,       data, nvs,     0x9000,  0x20000
-phy_init,  data, phy,     0x29000, 0x1000
-factory,   app,  factory, 0x30000, 0x1D0000
+nvs,       data, nvs,     0x9000,  0x80000
+phy_init,  data, phy,     0x89000, 0x1000
+factory,   app,  factory, 0x90000, 0x370000

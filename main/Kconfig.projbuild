@@ -9,15 +9,15 @@ menu "Locator Configuration"
 
     config LOCATOR_MAX_STORED_SCANS
         int "Maximum stored scans in NVS"
-        default 50
-        range 10 200
+        default 500
+        range 10 1000
         help
             Maximum number of scan records stored in NVS.
             Oldest scans are evicted when this limit is reached.
 
     config LOCATOR_MAX_APS_PER_SCAN
         int "Maximum APs per scan"
-        default 20
+        default 10
         range 5 30
         help
             Maximum number of access points to record per scan.

@@ -13,11 +13,10 @@
 #include "driver/rtc_io.h"
 #include "driver/gpio.h"
 
-#include "protocol_examples_common.h"
-
 #include "wifi_scan.h"
 #include "scan_store.h"
 #include "web_server.h"
+#include "wifi_connect.h"
 
 static const char *TAG = "locator";
 
@@ -57,9 +56,11 @@ static void run_scan_mode(void)
         return;  // Never reached
     }
 
-    ESP_LOGI(TAG, "Scanned %u APs, saving to NVS", ap_count);
+    time_t now;
+    time(&now);
+    ESP_LOGI(TAG, "Scanned %u APs, saving to NVS (epoch=%lld)", ap_count, (long long)now);
     uint16_t index;
-    esp_err_t err = scan_store_save(aps, (uint8_t)ap_count, &index);
+    esp_err_t err = scan_store_save(aps, (uint8_t)ap_count, (int64_t)now, &index);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save scan: %s", esp_err_to_name(err));
     } else {
@@ -93,12 +94,6 @@ static void sntp_sync(void)
         char buf[64];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
         ESP_LOGI(TAG, "SNTP synced: %s (epoch=%lld)", buf, (long long)now);
-
-        // Store time base
-        uint16_t head, count;
-        scan_store_get_range(&head, &count);
-        scan_store_set_time_base(now, count);
-        ESP_LOGI(TAG, "Time base set: epoch=%lld, scan_idx=%u", (long long)now, count);
     }
 
     esp_sntp_stop();
@@ -127,7 +122,26 @@ static void run_web_server_mode(void)
 {
     ESP_LOGI(TAG, "=== WEB SERVER MODE ===");
 
-    // Light up onboard LED to indicate web server mode
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(scan_store_init());
+
+    // Connect to WiFi (STA with stored creds, or SoftAP fallback)
+    wifi_conn_mode_t mode = wifi_connect_init();
+
+    if (mode == WIFI_CONN_MODE_STA) {
+        // SNTP time sync (only meaningful in STA mode with internet)
+        sntp_sync();
+    } else {
+        ESP_LOGI(TAG, "AP mode — connect to 'ESP32_Locator' WiFi, open http://192.168.4.1");
+    }
+
+    // Start web server (works in both STA and AP modes)
+    web_server_set_sleep_callback(enter_deep_sleep);
+    static httpd_handle_t server = NULL;
+    server = web_server_start();
+
+    // Light up onboard LED only after web server has started
     gpio_config_t led_conf = {
         .pin_bit_mask = (1ULL << CONFIG_LOCATOR_LED_GPIO),
         .mode = GPIO_MODE_OUTPUT,
@@ -135,35 +149,17 @@ static void run_web_server_mode(void)
     gpio_config(&led_conf);
     gpio_set_level(CONFIG_LOCATOR_LED_GPIO, 1);
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(scan_store_init());
-
-    // Connect to WiFi — retry indefinitely
-    esp_err_t err;
-    while (true) {
-        err = example_connect();
-        if (err == ESP_OK) break;
-        ESP_LOGW(TAG, "WiFi connect failed (%s), retrying in 5s...", esp_err_to_name(err));
-        example_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(5000));
+    if (mode == WIFI_CONN_MODE_STA) {
+        // Register reconnect handlers (STA only)
+        ESP_ERROR_CHECK(esp_event_handler_register(
+            IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &server));
+        ESP_ERROR_CHECK(esp_event_handler_register(
+            WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &server));
     }
 
-    // SNTP time sync
-    sntp_sync();
-
-    // Start web server
-    web_server_set_sleep_callback(enter_deep_sleep);
-    static httpd_handle_t server = NULL;
-    server = web_server_start();
-
-    // Register reconnect handlers
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &server));
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &server));
-
-    ESP_LOGI(TAG, "Web server running. Press Ctrl+] to exit monitor.");
+    char ip_buf[16];
+    wifi_connect_get_ip_str(ip_buf, sizeof(ip_buf));
+    ESP_LOGI(TAG, "Web server running at http://%s — Press Ctrl+] to exit monitor.", ip_buf);
 
     // Keep running
     while (1) {

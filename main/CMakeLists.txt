@@ -1,4 +1,4 @@
-set(srcs "main.c" "wifi_scan.c" "scan_store.c" "web_server.c" "geolocation.c")
+set(srcs "main.c" "wifi_scan.c" "scan_store.c" "web_server.c" "geolocation.c" "wifi_connect.c")
 
 idf_component_register(SRCS ${srcs}
                     INCLUDE_DIRS "."
