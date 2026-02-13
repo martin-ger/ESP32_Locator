@@ -1,6 +1,11 @@
 # ESP32 Locator
 
-A battery-friendly WiFi reconnaissance and geolocation system for ESP32. The device cycles between deep sleep and WiFi scanning, storing nearby access point data in non-volatile storage. When woken by the boot button (or on first power-up), it serves a web UI for browsing scan results, geolocating scans via Google's API, and viewing positions on an embedded map.
+A battery-friendly WiFi reconnaissance and geolocation system for ESP32. The tool uses only WiFi, no GPS required. In densly populated areas with any kind of WiFi cells this works with an accuracy of 10-20 meters. It uses WiFi scans
+and the Google GeoLocation API. Moderate use of this API should be free, but you will need your own API key (see below).
+
+The device cycles between deep sleep and WiFi scanning, storing nearby access point data in non-volatile storage. When woken by the boot button (or on first power-up), it serves a web UI for browsing scan results, geolocating scans via Google's API, and viewing positions on an embedded map.
+
+If you don't have an API key or if you don't want to deploy it on an embedded device, you can simply use the ESP32 Locator as scanner and export the scans for later use.
 
 ## How It Works
 
@@ -153,7 +158,7 @@ With 512KB NVS, approximately 500 scans with locations fit comfortably.
 | POST | `/api/locate?id=N` | Geolocate scan (cached after first call) |
 | DELETE | `/api/scan?id=N` | Delete one scan |
 | DELETE | `/api/scans` | Delete all scans |
-| GET | `/api/settings` | Get API key and scan interval |
+| GET | `/api/settings` | Get scan interval and whether API key is set |
 | POST | `/api/settings` | Save API key and scan interval |
 | POST | `/api/sleep` | Enter deep sleep (start scanning) |
 | GET | `/api/wifi/status` | Current WiFi mode, IP, SSID |
@@ -169,13 +174,32 @@ main/
   wifi_scan.c/h       WiFi scanning (STA mode, no connection)
   wifi_connect.c/h    WiFi connection management (STA + SoftAP fallback)
   scan_store.c/h      NVS storage: scans, locations, settings, WiFi credentials
-  web_server.c/h      HTTP server and all URI handlers
+  web_server.c/h      HTTP server and all URI handlers (CORS enabled)
   geolocation.c/h     Google Geolocation API client (HTTPS + cJSON)
   Kconfig.projbuild   Menuconfig options
   CMakeLists.txt      Build config, embedded files
   pages/
     index.html        Single-page web UI (Matrix-themed)
     favicon.png       Browser tab icon
+locator.html          Standalone local analyzer (see below)
 partitions.csv        Custom partition table (512KB NVS, 4MB flash)
 sdkconfig.defaults    Flash size, partition table, TLS cert bundle, WiFi scan sorting
 ```
+
+## Local Analyzer (`locator.html`)
+
+A standalone HTML/JS application that runs entirely in a local browser, independent of the ESP32's embedded web UI. Open `locator.html` directly in a browser (double-click or `file://` URL).
+
+### Data Sources
+
+- **Connect to ESP** -- enter the ESP32's IP address to fetch all scans over the local network (requires the ESP to be in web server mode). CORS headers on the ESP allow cross-origin access.
+- **Import JSON** -- load a previously exported scan file. Location data included in the export is restored automatically, and already-located scans are marked in the overview.
+
+### Features
+
+- Same terminal-style interface as the on-device UI
+- **Google API key stored locally** in the browser's `localStorage` -- never sent to the ESP
+- **Client-side geolocation** -- calls the Google Geolocation API directly from the browser, no proxy needed
+- **Locate All** -- batch-geolocate all unlocated scans with a progress bar
+- **Export** -- downloads all scan data including location results as JSON (re-importable)
+- Scan overview with AP count, diffs, distances between consecutive located scans

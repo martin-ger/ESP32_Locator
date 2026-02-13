@@ -40,6 +40,23 @@ static const char *authmode_str(uint8_t mode)
     }
 }
 
+// Set CORS headers so external clients (e.g. locator.html) can access the API
+static void set_cors_headers(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+}
+
+// Handle CORS preflight for any /api/* route
+static esp_err_t api_options_handler(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 // GET / — serve index.html
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
@@ -86,6 +103,7 @@ static int bssid_diff(const uint8_t prev[][6], uint8_t prev_n,
 // GET /api/scans — list all scans (chunked response, low memory)
 static esp_err_t api_scans_get_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     uint16_t head, count;
     esp_err_t err = scan_store_get_range(&head, &count);
     if (err != ESP_OK) {
@@ -156,6 +174,7 @@ static esp_err_t api_scans_get_handler(httpd_req_t *req)
 // DELETE /api/scans — delete all scans
 static esp_err_t api_scans_delete_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     esp_err_t err = scan_store_delete_all();
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
@@ -169,6 +188,7 @@ static esp_err_t api_scans_delete_handler(httpd_req_t *req)
 // GET /api/scan?id=N — full scan detail
 static esp_err_t api_scan_get_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char buf[16];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query");
@@ -240,6 +260,7 @@ static esp_err_t api_scan_get_handler(httpd_req_t *req)
 // DELETE /api/scan?id=N — delete one scan
 static esp_err_t api_scan_delete_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char buf[16];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query");
@@ -266,6 +287,7 @@ static esp_err_t api_scan_delete_handler(httpd_req_t *req)
 // POST /api/locate?id=N — geolocate a scan (cached in NVS after first call)
 static esp_err_t api_locate_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char buf[16];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query");
@@ -330,6 +352,18 @@ static esp_err_t api_locate_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(resp, "accuracy", accuracy);
     cJSON_AddBoolToObject(resp, "cached", cached);
 
+    // Include map embed URL so the API key is never sent to the frontend
+    {
+        char map_key[129] = {0};
+        if (scan_store_get_api_key(map_key, sizeof(map_key)) == ESP_OK && map_key[0] != '\0') {
+            char map_url[300];
+            snprintf(map_url, sizeof(map_url),
+                     "https://www.google.com/maps/embed/v1/place?key=%s&q=%.6f,%.6f&zoom=16",
+                     map_key, lat, lng);
+            cJSON_AddStringToObject(resp, "map_url", map_url);
+        }
+    }
+
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
     if (!json) {
@@ -343,14 +377,15 @@ static esp_err_t api_locate_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/settings — get API key + scan interval
+// GET /api/settings — get scan interval + whether API key is configured
 static esp_err_t api_settings_get_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char api_key[129] = {0};
-    scan_store_get_api_key(api_key, sizeof(api_key));
+    bool key_set = (scan_store_get_api_key(api_key, sizeof(api_key)) == ESP_OK && api_key[0] != '\0');
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "api_key", api_key);
+    cJSON_AddBoolToObject(resp, "api_key_set", key_set);
     cJSON_AddNumberToObject(resp, "scan_interval", scan_store_get_scan_interval());
 
     char *json = cJSON_PrintUnformatted(resp);
@@ -369,6 +404,7 @@ static esp_err_t api_settings_get_handler(httpd_req_t *req)
 // POST /api/settings — save API key
 static esp_err_t api_settings_post_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char body[256];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
@@ -384,7 +420,7 @@ static esp_err_t api_settings_post_handler(httpd_req_t *req)
     }
 
     cJSON *key = cJSON_GetObjectItem(json, "api_key");
-    if (key && cJSON_IsString(key)) {
+    if (key && cJSON_IsString(key) && key->valuestring[0] != '\0') {
         scan_store_set_api_key(key->valuestring);
     }
 
@@ -412,6 +448,7 @@ static esp_err_t api_settings_post_handler(httpd_req_t *req)
 // POST /api/sleep — enter deep sleep (start scanning)
 static esp_err_t api_sleep_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true,\"msg\":\"Entering deep sleep...\"}");
 
@@ -428,6 +465,7 @@ static esp_err_t api_sleep_handler(httpd_req_t *req)
 // GET /api/wifi/status — current WiFi mode, IP, SSID
 static esp_err_t api_wifi_status_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     cJSON *resp = cJSON_CreateObject();
 
     wifi_conn_mode_t mode = wifi_connect_get_mode();
@@ -459,6 +497,7 @@ static esp_err_t api_wifi_status_handler(httpd_req_t *req)
 // GET /api/wifi/scan — scan for nearby networks
 static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char *json = wifi_connect_scan_networks();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, strlen(json));
@@ -469,6 +508,7 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 // POST /api/wifi/connect — save credentials and reboot
 static esp_err_t api_wifi_connect_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     char body[256];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
@@ -512,6 +552,7 @@ static esp_err_t api_wifi_connect_handler(httpd_req_t *req)
 // POST /api/wifi/forget — clear credentials and reboot to AP mode
 static esp_err_t api_wifi_forget_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     scan_store_clear_wifi_creds();
 
     httpd_resp_set_type(req, "application/json");
@@ -564,13 +605,17 @@ static const httpd_uri_t uri_wifi_connect = {
 static const httpd_uri_t uri_wifi_forget = {
     .uri = "/api/wifi/forget", .method = HTTP_POST, .handler = api_wifi_forget_handler
 };
+static const httpd_uri_t uri_api_options = {
+    .uri = "/api/*", .method = HTTP_OPTIONS, .handler = api_options_handler
+};
 
 httpd_handle_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 17;
     config.stack_size = 10240;  // TLS handshake for Google API needs extra stack
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_handle_t server = NULL;
     ESP_LOGI(TAG, "Starting web server on port %d", config.server_port);
@@ -594,6 +639,7 @@ httpd_handle_t web_server_start(void)
     httpd_register_uri_handler(server, &uri_wifi_scan);
     httpd_register_uri_handler(server, &uri_wifi_connect);
     httpd_register_uri_handler(server, &uri_wifi_forget);
+    httpd_register_uri_handler(server, &uri_api_options);
 
     ESP_LOGI(TAG, "Web server started");
     return server;

@@ -235,10 +235,8 @@ async function locateScan(id) {
     const loc = await r.json();
     const cachedTag = loc.cached ? ' <span class="tag">CACHED</span>' : ' <span class="tag" style="border-color:#00ff41;color:#00ff41">NEW</span>';
     $('#map-info').innerHTML = `LAT: ${loc.lat.toFixed(6)} &nbsp; LNG: ${loc.lng.toFixed(6)} &nbsp; ACC: ${loc.accuracy.toFixed(0)}m${cachedTag}`;
-    const sr = await fetch('/api/settings');
-    const settings = await sr.json();
-    if(settings.api_key) {
-      $('#map-frame').src = `https://www.google.com/maps/embed/v1/place?key=${settings.api_key}&q=${loc.lat},${loc.lng}&zoom=16`;
+    if(loc.map_url) {
+      $('#map-frame').src = loc.map_url;
     } else {
       $('#map-info').innerHTML += '<br><span class="info">Set API key in Config to render map.</span>';
     }
@@ -294,7 +292,8 @@ async function exportScans() {
 async function loadSettings() {
   const r = await fetch('/api/settings');
   const data = await r.json();
-  $('#api-key').value = data.api_key || '';
+  $('#api-key').value = '';
+  $('#api-key').placeholder = data.api_key_set ? '(key configured)' : 'enter_api_key';
   $('#scan-interval').value = data.scan_interval || 60;
   loadWifiStatus();
 }

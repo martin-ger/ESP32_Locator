@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Locator Analyzer</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Share Tech Mono','Courier New',monospace;background:#000;color:#00ff41;max-width:860px;margin:0 auto;padding:16px;
+  background-image:repeating-linear-gradient(0deg,rgba(0,255,65,.03) 0px,rgba(0,255,65,.03) 1px,transparent 1px,transparent 3px);
+  min-height:100vh}
+h1{font-size:1.5em;color:#00ff41;margin-bottom:4px;text-shadow:0 0 10px #00ff41,0 0 20px #00ff4180;letter-spacing:3px}
+.subtitle{color:#008f11;font-size:.75em;margin-bottom:12px;letter-spacing:2px}
+h2{font-size:1.1em;color:#00ff41;margin-bottom:8px;text-shadow:0 0 8px #00ff4160}
+nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #003b00;padding-bottom:12px}
+nav button{background:transparent;border:1px solid #003b00;color:#008f11;padding:6px 16px;cursor:pointer;font-family:inherit;font-size:.85em;text-transform:uppercase;letter-spacing:1px;transition:all .2s}
+nav button:hover{border-color:#00ff41;color:#00ff41;text-shadow:0 0 8px #00ff41;box-shadow:0 0 8px #00ff4130}
+nav button.active{border-color:#00ff41;color:#00ff41;background:#00ff4110;text-shadow:0 0 8px #00ff41}
+.view{display:none}
+.view.active{display:block;animation:fadeIn .3s}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:.82em}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid #003b00}
+th{background:#001a00;color:#00ff41;text-transform:uppercase;letter-spacing:1px;font-size:.8em;position:sticky;top:0}
+tr:hover{background:#00ff4108}
+td{color:#00cc33}
+button{background:transparent;border:1px solid #003b00;color:#008f11;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:.82em;transition:all .2s}
+button:hover{border-color:#00ff41;color:#00ff41;text-shadow:0 0 5px #00ff41}
+button.danger{border-color:#3b0000;color:#ff4141}
+button.danger:hover{border-color:#ff4141;color:#ff4141;text-shadow:0 0 5px #ff4141}
+button.go{border-color:#003b00;color:#00ff41;background:#00ff4115;text-shadow:0 0 5px #00ff4180}
+button.go:hover{background:#00ff4125;box-shadow:0 0 12px #00ff4130}
+input[type=text],input[type=password]{background:#001a00;border:1px solid #003b00;color:#00ff41;padding:6px 10px;width:100%;max-width:420px;font-family:inherit;font-size:.9em;transition:border-color .2s}
+input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#00ff41;box-shadow:0 0 8px #00ff4130}
+input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
+.msg{padding:8px 12px;margin:8px 0;font-size:.85em;border:1px solid}
+.msg.ok{border-color:#003b00;color:#00ff41;background:#00ff4110}
+.msg.err{border-color:#3b0000;color:#ff4141;background:#ff414110}
+.bar{height:5px;background:#001a00;overflow:hidden;margin:4px 0;border:1px solid #003b0050}
+.bar .fill{height:100%;transition:width .3s}
+#map-frame{width:100%;height:400px;border:1px solid #003b00;background:#000}
+.info{color:#006600;font-size:.82em;margin:4px 0}
+.cursor{display:inline-block;width:8px;height:1.1em;background:#00ff41;animation:blink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+.glow{text-shadow:0 0 10px #00ff41,0 0 20px #00ff4140}
+.panel{border:1px solid #003b00;padding:12px;margin:8px 0;background:#00110a08}
+.tag{display:inline-block;padding:1px 6px;border:1px solid #003b00;font-size:.75em;color:#008f11;margin:0 2px}
+progress{appearance:none;-webkit-appearance:none;width:100%;height:6px;border:1px solid #003b00;background:#001a00;margin:8px 0}
+progress::-webkit-progress-bar{background:#001a00}
+progress::-webkit-progress-value{background:#00ff41}
+progress::-moz-progress-bar{background:#00ff41}
+</style>
+</head>
+<body>
+<h1>ESP32_LOCATOR_ANALYZER<span class="cursor"></span></h1>
+<div class="subtitle">// local scan analyzer & geolocation client</div>
+<nav>
+<button onclick="showView('connect')" id="nav-connect">[ Connect ]</button>
+<button onclick="showView('scans')" id="nav-scans">[ Scans ]</button>
+</nav>
+
+<div id="v-connect" class="view active">
+<h2>&gt; data_source</h2>
+<div class="panel">
+<label class="info">ESP_ADDRESS</label>
+<div style="display:flex;gap:8px;margin-top:4px;align-items:center">
+<input type="text" id="esp-ip" placeholder="192.168.1.100" style="max-width:220px">
+<button class="go" onclick="connectEsp()">[ Connect ]</button>
+</div>
+<div id="connect-status" style="margin-top:6px"></div>
+</div>
+<div class="panel">
+<label class="info">IMPORT_FROM_FILE</label>
+<div style="margin-top:6px;display:flex;gap:8px;align-items:center">
+<button onclick="importJson()">[ Import JSON ]</button>
+<span class="info" id="import-status"></span>
+</div>
+</div>
+<div class="panel">
+<label class="info">GOOGLE_API_KEY</label>
+<div style="margin-top:4px">
+<input type="password" id="api-key" placeholder="enter API key for geolocation + maps" autocomplete="off">
+</div>
+<div style="margin-top:8px"><button onclick="saveApiKey()">[ Save Key ]</button></div>
+<div id="key-status" style="margin-top:4px"></div>
+</div>
+</div>
+
+<div id="v-scans" class="view">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<h2>&gt; stored_scans</h2>
+<div><button onclick="exportScans()">Export</button> <button onclick="locateAll()">Locate All</button></div>
+</div>
+<div id="locate-progress"></div>
+<div id="scan-list" class="panel"></div>
+</div>
+
+<div id="v-detail" class="view">
+<button onclick="showView('scans')" style="margin-bottom:10px">&lt; back</button>
+<h2>&gt; scan_data [<span id="detail-id"></span>]</h2>
+<p class="info" id="detail-time"></p>
+<div id="detail-aps"></div>
+<div id="detail-nav" style="display:flex;justify-content:space-between;margin-top:10px"></div>
+</div>
+
+<div id="v-map" class="view">
+<button onclick="showView('scans')" style="margin-bottom:10px">&lt; back</button>
+<h2>&gt; location [<span id="map-id"></span>]</h2>
+<div class="panel" id="map-info" style="margin-bottom:8px"></div>
+<iframe id="map-frame" frameborder="0" allowfullscreen></iframe>
+<div id="map-nav" style="display:flex;justify-content:space-between;margin-top:10px"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const views = ['connect','scans','detail','map'];
+
+let scanSummaries = [];
+let scanDetails = {};
+let scanIds = [];
+let locationCache = {};
+let espBase = '';
+
+// Restore saved state
+(function init() {
+  const ip = localStorage.getItem('esp_ip') || '';
+  const key = localStorage.getItem('google_api_key') || '';
+  if (ip) $('#esp-ip').value = ip;
+  if (key) {
+    $('#api-key').value = key;
+    $('#key-status').innerHTML = '<span class="tag" style="border-color:#00ff41;color:#00ff41">KEY SET</span>';
+  }
+})();
+
+function showView(v) {
+  views.forEach(n => {
+    const el = document.getElementById('v-'+n);
+    if(el) el.classList.toggle('active', n===v);
+    const nb = document.getElementById('nav-'+n);
+    if(nb) nb.classList.toggle('active', n===v);
+  });
+  if(v==='scans') renderScans();
+}
+
+function ts(epoch) {
+  if(!epoch) return '<span class="tag">NO_TIMESTAMP</span>';
+  return new Date(epoch*1000).toLocaleString();
+}
+
+function rssiBar(rssi) {
+  const pct = Math.max(0, Math.min(100, (rssi+100)*2));
+  const color = pct>60?'#00ff41':pct>30?'#ffaa00':'#ff4141';
+  return `<div class="bar" style="width:60px;display:inline-block"><div class="fill" style="width:${pct}%;background:${color}"></div></div> ${rssi}dBm`;
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const r = 6371.0;
+  const dLat = (lat2 - lat1) * Math.PI / 180.0;
+  const dLon = (lon2 - lon1) * Math.PI / 180.0;
+  const la1 = lat1 * Math.PI / 180.0;
+  const la2 = lat2 * Math.PI / 180.0;
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  return r * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function fmtDist(km) {
+  if (km < 1) return Math.round(km * 1000) + 'm';
+  return km.toFixed(2) + 'km';
+}
+
+function getApiKey() {
+  return localStorage.getItem('google_api_key') || '';
+}
+
+// ---- Connect to ESP ----
+
+async function connectEsp() {
+  const ip = $('#esp-ip').value.trim();
+  if (!ip) { $('#connect-status').innerHTML = '<span class="msg err">Enter ESP IP address</span>'; return; }
+  localStorage.setItem('esp_ip', ip);
+  espBase = 'http://' + ip;
+  $('#connect-status').innerHTML = '<span class="glow">Connecting...</span><span class="cursor"></span>';
+
+  try {
+    const r = await fetch(espBase + '/api/scans');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    scanSummaries = data;
+    scanIds = data.map(s => s.id);
+    scanDetails = {};
+    locationCache = {};
+
+    // Import cached locations from ESP summaries
+    data.forEach(s => {
+      if (s.lat !== undefined && s.lng !== undefined) {
+        locationCache[s.id] = { lat: s.lat, lng: s.lng, accuracy: s.accuracy || 0 };
+      }
+    });
+
+    // Fetch all scan details
+    $('#connect-status').innerHTML = `<span class="glow">Fetching ${data.length} scans...</span><span class="cursor"></span>`;
+    for (const s of data) {
+      try {
+        const dr = await fetch(espBase + '/api/scan?id=' + s.id);
+        if (dr.ok) scanDetails[s.id] = await dr.json();
+      } catch(e) { /* skip failed fetches */ }
+    }
+
+    computeDiffs();
+    const locCount = Object.keys(locationCache).length;
+    const locTag = locCount ? ` | ${locCount} located` : '';
+    $('#connect-status').innerHTML = `<span class="msg ok">CONNECTED: ${data.length} scans imported${locTag}</span>`;
+    showView('scans');
+  } catch(e) {
+    $('#connect-status').innerHTML = `<span class="msg err">CONNECTION_FAILED: ${e.message}</span>`;
+  }
+}
+
+// ---- Import JSON ----
+
+function importJson() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data) || !data.length) throw new Error('Expected non-empty JSON array');
+
+      scanDetails = {};
+      locationCache = {};
+      scanSummaries = data.map(s => {
+        scanDetails[s.id] = s;
+        if (s.location && s.location.lat !== undefined) {
+          locationCache[s.id] = { lat: s.location.lat, lng: s.location.lng, accuracy: s.location.accuracy || 0 };
+        }
+        return { id: s.id, timestamp: s.timestamp, aps: s.aps.length };
+      });
+      scanIds = scanSummaries.map(s => s.id);
+      computeDiffs();
+      espBase = '';
+      const locCount = Object.keys(locationCache).length;
+      const locTag = locCount ? ` | ${locCount} located` : '';
+      $('#import-status').textContent = `Loaded ${data.length} scans from ${file.name}${locTag}`;
+      showView('scans');
+    } catch(e) {
+      $('#import-status').textContent = 'IMPORT_FAILED: ' + e.message;
+    }
+  };
+  input.click();
+}
+
+// ---- Compute diffs between consecutive scans ----
+
+function computeDiffs() {
+  let prevBssids = null;
+  scanSummaries.forEach(s => {
+    const detail = scanDetails[s.id];
+    if (detail && detail.aps) {
+      const bssids = new Set(detail.aps.map(a => a.bssid));
+      if (prevBssids) {
+        s.diffs = [...bssids].filter(b => !prevBssids.has(b)).length;
+      }
+      s.aps = detail.aps.length;
+      prevBssids = bssids;
+    }
+  });
+}
+
+// ---- Render scan list ----
+
+function renderScans() {
+  if (!scanSummaries.length) {
+    $('#scan-list').innerHTML = '<div class="panel"><span class="info">No scan records. Connect to an ESP or import a JSON file.</span></div>';
+    return;
+  }
+
+  let prevLoc = null;
+  const distances = {};
+  scanSummaries.forEach(s => {
+    const loc = locationCache[s.id];
+    if (loc) {
+      if (prevLoc) distances[s.id] = haversine(prevLoc.lat, prevLoc.lng, loc.lat, loc.lng);
+      prevLoc = loc;
+    }
+  });
+
+  let h = '<table><tr><th>idx</th><th>timestamp</th><th>aps</th><th>diffs</th><th>dist</th><th>actions</th></tr>';
+  scanSummaries.forEach(s => {
+    const d = s.diffs !== undefined ? s.diffs : '-';
+    const dclass = (s.diffs !== undefined && s.diffs > s.aps / 2) ? ' style="color:#ff4141;text-shadow:0 0 5px #ff4141"' : '';
+    const located = !!locationCache[s.id];
+    const locBtn = located
+      ? '<button onclick="locateScan('+s.id+')" style="font-weight:bold;border-color:#00ff41;color:#00ff41">Locate</button>'
+      : '<button onclick="locateScan('+s.id+')">Locate</button>';
+    const dist = distances[s.id] !== undefined ? fmtDist(distances[s.id]) : '-';
+    h += `<tr><td>${String(s.id).padStart(5,'0')}</td><td>${ts(s.timestamp)}</td><td>${s.aps}</td><td${dclass}>${d}</td><td>${dist}</td>
+      <td><button onclick="viewScan(${s.id})">View</button> ${locBtn}</td></tr>`;
+  });
+  h += '</table>';
+  $('#scan-list').innerHTML = h;
+}
+
+// ---- Navigation helpers ----
+
+function navButtons(id, fn, midBtn) {
+  const idx = scanIds.indexOf(id);
+  const prev = idx > 0 ? scanIds[idx-1] : null;
+  const next = idx < scanIds.length-1 ? scanIds[idx+1] : null;
+  let h = prev !== null ? `<button onclick="${fn}(${prev})">&lt; Prev</button>` : '<span></span>';
+  h += midBtn || '';
+  h += next !== null ? `<button onclick="${fn}(${next})">Next &gt;</button>` : '<span></span>';
+  return h;
+}
+
+// ---- View scan detail ----
+
+async function viewScan(id) {
+  let detail = scanDetails[id];
+  if (!detail && espBase) {
+    try {
+      const r = await fetch(espBase + '/api/scan?id=' + id);
+      detail = await r.json();
+      scanDetails[id] = detail;
+    } catch(e) {
+      $('#detail-aps').innerHTML = '<span class="msg err">FETCH_FAILED: ' + e.message + '</span>';
+      showView('detail');
+      return;
+    }
+  }
+  if (!detail) { alert('Scan data not available'); return; }
+
+  $('#detail-id').textContent = String(id).padStart(5,'0');
+  $('#detail-time').innerHTML = 'timestamp: ' + ts(detail.timestamp);
+  let h = '<table><tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Ch</th><th>Auth</th></tr>';
+  detail.aps.forEach(a => {
+    h += `<tr><td>${a.ssid||'<span class="info">&lt;hidden&gt;</span>'}</td><td>${a.bssid}</td>
+      <td>${rssiBar(a.rssi)}</td><td>${a.channel}</td><td><span class="tag">${a.auth}</span></td></tr>`;
+  });
+  h += '</table>';
+  $('#detail-aps').innerHTML = h;
+  $('#detail-nav').innerHTML = navButtons(id, 'viewScan', `<button onclick="locateScan(${id})">Locate</button>`);
+  showView('detail');
+}
+
+// ---- Geolocation (client-side via Google API) ----
+
+async function locateScan(id) {
+  showView('map');
+  $('#map-id').textContent = String(id).padStart(5,'0');
+  $('#map-frame').src = '';
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    $('#map-info').innerHTML = '<span class="msg err">No API key configured. Set it in the Connect tab.</span>';
+    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+    return;
+  }
+
+  // Check cache
+  if (locationCache[id]) {
+    showLocation(id, locationCache[id], true);
+    return;
+  }
+
+  // Need scan detail
+  let detail = scanDetails[id];
+  if (!detail && espBase) {
+    try {
+      const r = await fetch(espBase + '/api/scan?id=' + id);
+      detail = await r.json();
+      scanDetails[id] = detail;
+    } catch(e) {
+      $('#map-info').innerHTML = `<span class="msg err">FETCH_FAILED: ${e.message}</span>`;
+      $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+      return;
+    }
+  }
+  if (!detail) {
+    $('#map-info').innerHTML = '<span class="msg err">Scan data not available</span>';
+    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+    return;
+  }
+
+  $('#map-info').innerHTML = '<span class="glow">Requesting geolocation...</span><span class="cursor"></span>';
+
+  try {
+    const wifiAccessPoints = detail.aps.map(a => ({
+      macAddress: a.bssid,
+      signalStrength: a.rssi,
+      channel: a.channel
+    }));
+
+    const r = await fetch('https://www.googleapis.com/geolocation/v1/geolocate?key=' + apiKey, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ wifiAccessPoints })
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      $('#map-info').innerHTML = `<span class="msg err">GEOLOCATION_FAILED (${r.status}): ${errText}</span>`;
+      $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+      return;
+    }
+
+    const data = await r.json();
+    const loc = { lat: data.location.lat, lng: data.location.lng, accuracy: data.accuracy };
+    locationCache[id] = loc;
+    showLocation(id, loc, false);
+  } catch(e) {
+    $('#map-info').innerHTML = `<span class="msg err">REQUEST_FAILED: ${e.message}</span>`;
+    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+  }
+}
+
+function showLocation(id, loc, cached) {
+  const apiKey = getApiKey();
+  const cachedTag = cached ? ' <span class="tag">CACHED</span>' : ' <span class="tag" style="border-color:#00ff41;color:#00ff41">NEW</span>';
+  $('#map-info').innerHTML = `LAT: ${loc.lat.toFixed(6)} &nbsp; LNG: ${loc.lng.toFixed(6)} &nbsp; ACC: ${loc.accuracy.toFixed(0)}m${cachedTag}`;
+  if (apiKey) {
+    $('#map-frame').src = `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${loc.lat},${loc.lng}&zoom=16`;
+  }
+  $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+}
+
+// ---- Locate All ----
+
+async function locateAll() {
+  const apiKey = getApiKey();
+  if (!apiKey) { alert('Set Google API key first in the Connect tab.'); return; }
+
+  const unlocated = scanSummaries.filter(s => !locationCache[s.id] && scanDetails[s.id]);
+  if (!unlocated.length) { alert('All scans already located (or no scan details available).'); return; }
+  if (!confirm(`Geolocate ${unlocated.length} scans via Google API?`)) return;
+
+  const prog = $('#locate-progress');
+  let done = 0, failed = 0;
+  prog.innerHTML = `<progress value="0" max="${unlocated.length}"></progress><span class="info"> 0/${unlocated.length}</span>`;
+
+  for (const s of unlocated) {
+    const detail = scanDetails[s.id];
+    try {
+      const wifiAccessPoints = detail.aps.map(a => ({
+        macAddress: a.bssid, signalStrength: a.rssi, channel: a.channel
+      }));
+      const r = await fetch('https://www.googleapis.com/geolocation/v1/geolocate?key=' + apiKey, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ wifiAccessPoints })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        locationCache[s.id] = { lat: data.location.lat, lng: data.location.lng, accuracy: data.accuracy };
+      } else { failed++; }
+    } catch(e) { failed++; }
+    done++;
+    prog.innerHTML = `<progress value="${done}" max="${unlocated.length}"></progress><span class="info"> ${done}/${unlocated.length}${failed ? ' ('+failed+' failed)' : ''}</span>`;
+  }
+
+  prog.innerHTML = `<span class="msg ok">Locate complete: ${done - failed} succeeded, ${failed} failed</span>`;
+  setTimeout(() => { prog.innerHTML = ''; }, 5000);
+  renderScans();
+}
+
+// ---- Export ----
+
+function exportScans() {
+  const allDetails = scanSummaries.map(s => scanDetails[s.id]).filter(Boolean);
+  if (!allDetails.length) { alert('No scan data to export.'); return; }
+
+  // Attach location data to export
+  const exportData = allDetails.map(s => {
+    const loc = locationCache[s.id];
+    return loc ? { ...s, location: { lat: loc.lat, lng: loc.lng, accuracy: loc.accuracy } } : s;
+  });
+
+  const firstTs = scanSummaries[0]?.timestamp;
+  let dtStr;
+  if (firstTs) {
+    const d = new Date(firstTs * 1000);
+    dtStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')
+      + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0');
+  } else {
+    dtStr = new Date().toISOString().slice(0,10);
+  }
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'LocatorScan_' + dtStr + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ---- Save API key ----
+
+function saveApiKey() {
+  const key = $('#api-key').value.trim();
+  if (!key) {
+    localStorage.removeItem('google_api_key');
+    $('#key-status').innerHTML = '<span class="info">Key cleared</span>';
+  } else {
+    localStorage.setItem('google_api_key', key);
+    $('#key-status').innerHTML = '<span class="tag" style="border-color:#00ff41;color:#00ff41">KEY SET</span>';
+  }
+  setTimeout(() => { $('#key-status').innerHTML = key ? '<span class="tag" style="border-color:#00ff41;color:#00ff41">KEY SET</span>' : ''; }, 2000);
+}
+</script>
+</body>
+</html>
