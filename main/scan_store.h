@@ -54,6 +54,10 @@ esp_err_t scan_store_save_location(uint16_t index, double lat, double lng, doubl
 esp_err_t scan_store_get_location(uint16_t index, scan_location_t *out);
 bool      scan_store_has_location(uint16_t index);
 
+// Web server password (up to 64 chars). Empty/not-set = auth disabled.
+esp_err_t scan_store_get_web_password(char *buf, size_t buf_size);
+esp_err_t scan_store_set_web_password(const char *pass);
+
 // WiFi credential management
 esp_err_t scan_store_get_wifi_ssid(char *buf, size_t buf_size);
 esp_err_t scan_store_set_wifi_ssid(const char *ssid);

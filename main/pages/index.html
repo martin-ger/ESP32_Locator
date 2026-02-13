@@ -106,6 +106,14 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <div style="margin-top:4px">
 <input type="password" id="api-key" placeholder="enter_api_key" autocomplete="off">
 </div>
+<label class="info" style="margin-top:14px;display:block">WEB_PASSWORD</label>
+<div style="margin-top:4px">
+<input type="password" id="web-pass" placeholder="set_password" autocomplete="off">
+</div>
+<div style="margin-top:4px">
+<input type="password" id="web-pass-confirm" placeholder="confirm_password" autocomplete="off">
+</div>
+<div style="margin-top:6px"><button class="danger" onclick="clearPassword()">[ Clear Password ]</button> <span id="pass-status"></span></div>
 <label class="info" style="margin-top:14px;display:block">SCAN_INTERVAL_SEC</label>
 <div style="display:flex;gap:8px;margin-top:4px;align-items:center">
 <input type="text" id="scan-interval" placeholder="60" style="max-width:120px">
@@ -294,6 +302,11 @@ async function loadSettings() {
   const data = await r.json();
   $('#api-key').value = '';
   $('#api-key').placeholder = data.api_key_set ? '(key configured)' : 'enter_api_key';
+  $('#web-pass').value = '';
+  $('#web-pass-confirm').value = '';
+  $('#web-pass').placeholder = data.web_pass_set ? '(password set)' : 'set_password';
+  $('#web-pass-confirm').placeholder = data.web_pass_set ? '(confirm)' : 'confirm_password';
+  $('#pass-status').innerHTML = data.web_pass_set ? '<span class="tag" style="border-color:#ffaa00;color:#ffaa00">LOCKED</span>' : '';
   $('#scan-interval').value = data.scan_interval || 60;
   loadWifiStatus();
 }
@@ -363,21 +376,45 @@ async function forgetWifi() {
 
 async function saveSettings() {
   const key = $('#api-key').value.trim();
+  const pass = $('#web-pass').value;
+  const passConfirm = $('#web-pass-confirm').value;
   const ivl = parseInt($('#scan-interval').value) || 60;
+  if (pass !== '' && pass !== passConfirm) {
+    $('#settings-msg').innerHTML = '<p class="msg err">PASSWORDS_DO_NOT_MATCH</p>';
+    setTimeout(() => $('#settings-msg').innerHTML = '', 4000);
+    return;
+  }
   if (ivl < 10 || ivl > 3600) {
     $('#settings-msg').innerHTML = '<p class="msg err">WARN: scan interval must be 10-3600 seconds</p>';
     setTimeout(() => $('#settings-msg').innerHTML = '', 4000);
     return;
   }
+  const payload = {api_key:key, scan_interval:ivl};
+  if (pass !== '') payload.web_password = pass;
   const r = await fetch('/api/settings', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({api_key:key, scan_interval:ivl})
+    body:JSON.stringify(payload)
   });
   $('#settings-msg').innerHTML = r.ok
     ? '<p class="msg ok">CONFIG_SAVED</p>'
     : '<p class="msg err">WRITE_FAILED</p>';
   setTimeout(() => $('#settings-msg').innerHTML = '', 3000);
+  if (r.ok) loadSettings();
+}
+
+async function clearPassword() {
+  if(!confirm('Remove web server password?\nAccess will be open to anyone on the network.')) return;
+  const r = await fetch('/api/settings', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({web_password:''})
+  });
+  $('#settings-msg').innerHTML = r.ok
+    ? '<p class="msg ok">PASSWORD_CLEARED</p>'
+    : '<p class="msg err">CLEAR_FAILED</p>';
+  setTimeout(() => $('#settings-msg').innerHTML = '', 3000);
+  if (r.ok) loadSettings();
 }
 
 async function startScanning() {

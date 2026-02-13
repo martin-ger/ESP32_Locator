@@ -213,6 +213,24 @@ esp_err_t scan_store_set_scan_interval(uint16_t seconds)
     return nvs_commit(nvs_h);
 }
 
+esp_err_t scan_store_get_web_password(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "web_pass", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_web_password(const char *pass)
+{
+    esp_err_t err;
+    if (pass[0] == '\0') {
+        err = nvs_erase_key(nvs_h, "web_pass");
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    } else {
+        err = nvs_set_str(nvs_h, "web_pass", pass);
+    }
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
 esp_err_t scan_store_save_location(uint16_t index, double lat, double lng, double accuracy)
 {
     char key[7];

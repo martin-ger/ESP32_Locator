@@ -68,6 +68,10 @@ progress::-moz-progress-bar{background:#00ff41}
 <input type="text" id="esp-ip" placeholder="192.168.1.100" style="max-width:220px">
 <button class="go" onclick="connectEsp()">[ Connect ]</button>
 </div>
+<label class="info" style="margin-top:8px;display:block">ESP_PASSWORD</label>
+<div style="margin-top:4px">
+<input type="password" id="esp-pass" placeholder="leave empty if no password" style="max-width:220px" autocomplete="off">
+</div>
 <div id="connect-status" style="margin-top:6px"></div>
 </div>
 <div class="panel">
@@ -121,12 +125,24 @@ let scanDetails = {};
 let scanIds = [];
 let locationCache = {};
 let espBase = '';
+let espAuthHeader = '';
+
+// Build fetch options with auth header for ESP requests
+function espFetch(url, opts) {
+  opts = opts || {};
+  if (espAuthHeader) {
+    opts.headers = Object.assign({ 'Authorization': espAuthHeader }, opts.headers || {});
+  }
+  return fetch(url, opts);
+}
 
 // Restore saved state
 (function init() {
   const ip = localStorage.getItem('esp_ip') || '';
+  const pass = localStorage.getItem('esp_pass') || '';
   const key = localStorage.getItem('google_api_key') || '';
   if (ip) $('#esp-ip').value = ip;
+  if (pass) $('#esp-pass').value = pass;
   if (key) {
     $('#api-key').value = key;
     $('#key-status').innerHTML = '<span class="tag" style="border-color:#00ff41;color:#00ff41">KEY SET</span>';
@@ -178,12 +194,15 @@ function getApiKey() {
 async function connectEsp() {
   const ip = $('#esp-ip').value.trim();
   if (!ip) { $('#connect-status').innerHTML = '<span class="msg err">Enter ESP IP address</span>'; return; }
+  const pass = $('#esp-pass').value;
   localStorage.setItem('esp_ip', ip);
+  localStorage.setItem('esp_pass', pass);
   espBase = 'http://' + ip;
+  espAuthHeader = pass ? 'Basic ' + btoa('admin:' + pass) : '';
   $('#connect-status').innerHTML = '<span class="glow">Connecting...</span><span class="cursor"></span>';
 
   try {
-    const r = await fetch(espBase + '/api/scans');
+    const r = await espFetch(espBase + '/api/scans');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     scanSummaries = data;
@@ -202,7 +221,7 @@ async function connectEsp() {
     $('#connect-status').innerHTML = `<span class="glow">Fetching ${data.length} scans...</span><span class="cursor"></span>`;
     for (const s of data) {
       try {
-        const dr = await fetch(espBase + '/api/scan?id=' + s.id);
+        const dr = await espFetch(espBase + '/api/scan?id=' + s.id);
         if (dr.ok) scanDetails[s.id] = await dr.json();
       } catch(e) { /* skip failed fetches */ }
     }
@@ -323,7 +342,7 @@ async function viewScan(id) {
   let detail = scanDetails[id];
   if (!detail && espBase) {
     try {
-      const r = await fetch(espBase + '/api/scan?id=' + id);
+      const r = await espFetch(espBase + '/api/scan?id=' + id);
       detail = await r.json();
       scanDetails[id] = detail;
     } catch(e) {
@@ -371,7 +390,7 @@ async function locateScan(id) {
   let detail = scanDetails[id];
   if (!detail && espBase) {
     try {
-      const r = await fetch(espBase + '/api/scan?id=' + id);
+      const r = await espFetch(espBase + '/api/scan?id=' + id);
       detail = await r.json();
       scanDetails[id] = detail;
     } catch(e) {

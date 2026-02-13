@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/param.h>
+#include "mbedtls/base64.h"
 
 static const char *TAG = "web_server";
 
@@ -51,15 +52,59 @@ static esp_err_t api_options_handler(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Authorization");
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
 
+// Check HTTP Basic Auth. Returns true if access is allowed.
+// When auth fails, sends 401 response — caller must return ESP_OK immediately.
+static bool check_auth(httpd_req_t *req)
+{
+    char stored_pass[65] = {0};
+    if (scan_store_get_web_password(stored_pass, sizeof(stored_pass)) != ESP_OK) {
+        return true;  // no password set — auth disabled
+    }
+
+    char auth_hdr[256] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", auth_hdr, sizeof(auth_hdr)) != ESP_OK) {
+        goto unauthorized;
+    }
+
+    if (strncmp(auth_hdr, "Basic ", 6) != 0) {
+        goto unauthorized;
+    }
+
+    // Decode Base64 payload
+    unsigned char decoded[192];
+    size_t decoded_len = 0;
+    if (mbedtls_base64_decode(decoded, sizeof(decoded) - 1, &decoded_len,
+                              (const unsigned char *)auth_hdr + 6, strlen(auth_hdr + 6)) != 0) {
+        goto unauthorized;
+    }
+    decoded[decoded_len] = '\0';
+
+    // Format is "username:password" — skip username, compare password
+    const char *colon = strchr((const char *)decoded, ':');
+    const char *password = colon ? colon + 1 : (const char *)decoded;
+
+    if (strcmp(password, stored_pass) == 0) {
+        return true;
+    }
+
+unauthorized:
+    set_cors_headers(req);
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP32 Locator\"");
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
+    return false;
+}
+
 // GET / — serve index.html
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)index_html_start,
                     index_html_end - index_html_start);
@@ -69,6 +114,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
 // GET /favicon.ico — serve favicon
 static esp_err_t favicon_get_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) return ESP_OK;
     httpd_resp_set_type(req, "image/png");
     httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=604800");
     httpd_resp_send(req, (const char *)favicon_png_start,
@@ -104,6 +150,7 @@ static int bssid_diff(const uint8_t prev[][6], uint8_t prev_n,
 static esp_err_t api_scans_get_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     uint16_t head, count;
     esp_err_t err = scan_store_get_range(&head, &count);
     if (err != ESP_OK) {
@@ -175,6 +222,7 @@ static esp_err_t api_scans_get_handler(httpd_req_t *req)
 static esp_err_t api_scans_delete_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     esp_err_t err = scan_store_delete_all();
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
@@ -189,6 +237,7 @@ static esp_err_t api_scans_delete_handler(httpd_req_t *req)
 static esp_err_t api_scan_get_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char buf[16];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query");
@@ -261,6 +310,7 @@ static esp_err_t api_scan_get_handler(httpd_req_t *req)
 static esp_err_t api_scan_delete_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char buf[16];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query");
@@ -288,6 +338,7 @@ static esp_err_t api_scan_delete_handler(httpd_req_t *req)
 static esp_err_t api_locate_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char buf[16];
     if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query");
@@ -377,15 +428,20 @@ static esp_err_t api_locate_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/settings — get scan interval + whether API key is configured
+// GET /api/settings — get scan interval + whether API key / password are configured
 static esp_err_t api_settings_get_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char api_key[129] = {0};
     bool key_set = (scan_store_get_api_key(api_key, sizeof(api_key)) == ESP_OK && api_key[0] != '\0');
 
+    char web_pass[65] = {0};
+    bool pass_set = (scan_store_get_web_password(web_pass, sizeof(web_pass)) == ESP_OK && web_pass[0] != '\0');
+
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "api_key_set", key_set);
+    cJSON_AddBoolToObject(resp, "web_pass_set", pass_set);
     cJSON_AddNumberToObject(resp, "scan_interval", scan_store_get_scan_interval());
 
     char *json = cJSON_PrintUnformatted(resp);
@@ -401,10 +457,11 @@ static esp_err_t api_settings_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// POST /api/settings — save API key
+// POST /api/settings — save API key, password, scan interval
 static esp_err_t api_settings_post_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char body[256];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
@@ -422,6 +479,11 @@ static esp_err_t api_settings_post_handler(httpd_req_t *req)
     cJSON *key = cJSON_GetObjectItem(json, "api_key");
     if (key && cJSON_IsString(key) && key->valuestring[0] != '\0') {
         scan_store_set_api_key(key->valuestring);
+    }
+
+    cJSON *pass = cJSON_GetObjectItem(json, "web_password");
+    if (pass && cJSON_IsString(pass)) {
+        scan_store_set_web_password(pass->valuestring);
     }
 
     cJSON *interval = cJSON_GetObjectItem(json, "scan_interval");
@@ -449,6 +511,7 @@ static esp_err_t api_settings_post_handler(httpd_req_t *req)
 static esp_err_t api_sleep_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true,\"msg\":\"Entering deep sleep...\"}");
 
@@ -466,6 +529,7 @@ static esp_err_t api_sleep_handler(httpd_req_t *req)
 static esp_err_t api_wifi_status_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     cJSON *resp = cJSON_CreateObject();
 
     wifi_conn_mode_t mode = wifi_connect_get_mode();
@@ -498,6 +562,7 @@ static esp_err_t api_wifi_status_handler(httpd_req_t *req)
 static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char *json = wifi_connect_scan_networks();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, strlen(json));
@@ -509,6 +574,7 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 static esp_err_t api_wifi_connect_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     char body[256];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
@@ -553,6 +619,7 @@ static esp_err_t api_wifi_connect_handler(httpd_req_t *req)
 static esp_err_t api_wifi_forget_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
     scan_store_clear_wifi_creds();
 
     httpd_resp_set_type(req, "application/json");
