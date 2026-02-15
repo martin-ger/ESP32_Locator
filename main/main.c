@@ -17,8 +17,37 @@
 #include "scan_store.h"
 #include "web_server.h"
 #include "wifi_connect.h"
+#include <mdns.h>
+#ifdef CONFIG_LOCATOR_OPEN_WIFI_ENABLED
+#include "open_wifi.h"
+#include "mqtt_publish.h"
+#endif
 
 static const char *TAG = "locator";
+
+#ifdef CONFIG_LOCATOR_OPEN_WIFI_ENABLED
+static esp_err_t mqtt_publish_hook(void)
+{
+    ESP_LOGI(TAG, "Open WiFi hook: MQTT publish");
+    esp_err_t err = mqtt_publish_scans();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "MQTT publish failed: %s (non-fatal)", esp_err_to_name(err));
+    }
+    return ESP_OK;
+}
+#endif
+
+static void start_mdns_service() {
+    esp_err_t err = mdns_init();
+    if (err) {
+        ESP_LOGW(TAG, "Error in starting mDNS!");
+        return;
+    }
+
+    mdns_hostname_set("locator");
+    mdns_instance_name_set("ESP32 Locator");
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+}
 
 static void enter_deep_sleep(void)
 {
@@ -42,11 +71,6 @@ static void run_scan_mode(void)
 {
     ESP_LOGI(TAG, "=== SCAN MODE ===");
 
-    // Need netif and event loop for WiFi scan
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(scan_store_init());
-
     stored_ap_t aps[CONFIG_LOCATOR_MAX_APS_PER_SCAN];
     uint16_t ap_count = wifi_scan_execute(aps, CONFIG_LOCATOR_MAX_APS_PER_SCAN);
 
@@ -66,6 +90,91 @@ static void run_scan_mode(void)
     } else {
         ESP_LOGI(TAG, "Saved scan #%u", index);
     }
+
+#ifdef CONFIG_LOCATOR_OPEN_WIFI_ENABLED
+    uint8_t ow_mode = scan_store_get_open_wifi_mode();
+    if (ow_mode != OPEN_WIFI_OFF) {
+        // Set hook based on mode: sync-only → no hook, MQTT+sync → publish hook
+        if (ow_mode == OPEN_WIFI_REQ) {
+            open_wifi_set_hook(mqtt_publish_hook);
+        } else {
+            open_wifi_set_hook(NULL);
+        }
+
+        // Light LED during WiFi attempt
+        gpio_config_t led_conf = {
+            .pin_bit_mask = (1ULL << CONFIG_LOCATOR_LED_GPIO),
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        gpio_config(&led_conf);
+        gpio_set_level(CONFIG_LOCATOR_LED_GPIO, 1);
+
+        bool wifi_done = false;
+
+        // Try home WiFi first if credentials are configured and SSID is in scan results
+        char home_ssid[33] = {0};
+        char home_pass[65] = {0};
+        if (scan_store_has_wifi_creds() &&
+            scan_store_get_wifi_ssid(home_ssid, sizeof(home_ssid)) == ESP_OK &&
+            scan_store_get_wifi_pass(home_pass, sizeof(home_pass)) == ESP_OK) {
+
+            // Check if home SSID appears in scan results
+            for (uint16_t j = 0; j < ap_count; j++) {
+                size_t len = aps[j].ssid_len;
+                if (len > 32) len = 32;
+                char scanned_ssid[33];
+                memcpy(scanned_ssid, aps[j].ssid, len);
+                scanned_ssid[len] = '\0';
+                if (strcmp(scanned_ssid, home_ssid) == 0) {
+                    ESP_LOGI(TAG, "Home WiFi '%s' found in scan results, attempting connection", home_ssid);
+                    if (open_wifi_try_home(home_ssid, home_pass) == ESP_OK) {
+                        wifi_done = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Fall through to open WiFi if home WiFi didn't work
+        if (!wifi_done) {
+            // Extract unique open SSIDs from scan results
+            const char *open_ssids[CONFIG_LOCATOR_MAX_APS_PER_SCAN];
+            char ssid_bufs[CONFIG_LOCATOR_MAX_APS_PER_SCAN][33];
+            uint8_t open_count = 0;
+
+            for (uint16_t j = 0; j < ap_count; j++) {
+                if (aps[j].authmode != 0 || aps[j].ssid_len == 0) continue;
+
+                // Null-terminate SSID
+                size_t len = aps[j].ssid_len;
+                if (len > 32) len = 32;
+                memcpy(ssid_bufs[open_count], aps[j].ssid, len);
+                ssid_bufs[open_count][len] = '\0';
+
+                // Deduplicate
+                bool dup = false;
+                for (uint8_t k = 0; k < open_count; k++) {
+                    if (strcmp(open_ssids[k], ssid_bufs[open_count]) == 0) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) continue;
+
+                open_ssids[open_count] = ssid_bufs[open_count];
+                open_count++;
+            }
+
+            if (open_count > 0) {
+                ESP_LOGI(TAG, "Found %u open WiFi network(s), mode=%u, attempting connection",
+                         open_count, ow_mode);
+                open_wifi_try(open_ssids, open_count);
+            }
+        }
+
+        gpio_set_level(CONFIG_LOCATOR_LED_GPIO, 0);
+    }
+#endif
 
     enter_deep_sleep();
 }
@@ -122,16 +231,14 @@ static void run_web_server_mode(void)
 {
     ESP_LOGI(TAG, "=== WEB SERVER MODE ===");
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(scan_store_init());
-
     // Connect to WiFi (STA with stored creds, or SoftAP fallback)
     wifi_conn_mode_t mode = wifi_connect_init();
 
     if (mode == WIFI_CONN_MODE_STA) {
         // SNTP time sync (only meaningful in STA mode with internet)
         sntp_sync();
+        // mDNS to reach the ESP at "locator.local"
+        start_mdns_service();
     } else {
         ESP_LOGI(TAG, "AP mode — connect to 'ESP32_Locator' WiFi, open http://192.168.4.1");
     }
@@ -169,6 +276,8 @@ static void run_web_server_mode(void)
 
 void app_main(void)
 {
+    esp_log_level_set("*", ESP_LOG_INFO);
+
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -179,6 +288,11 @@ void app_main(void)
 
     // Determine operating mode from wakeup cause
     esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
+
+    // Need NVS namespace open before checking boot_mode
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(scan_store_init());
 
     switch (wakeup) {
         case ESP_SLEEP_WAKEUP_TIMER:
@@ -193,8 +307,13 @@ void app_main(void)
 
         case ESP_SLEEP_WAKEUP_UNDEFINED:
         default:
-            ESP_LOGI(TAG, "Wakeup: POWER ON / RESET -> web server mode");
-            run_web_server_mode();
+            if (scan_store_get_boot_mode() == BOOT_MODE_SCAN) {
+                ESP_LOGI(TAG, "Wakeup: POWER ON / RESET -> scan mode (configured)");
+                run_scan_mode();
+            } else {
+                ESP_LOGI(TAG, "Wakeup: POWER ON / RESET -> web server mode");
+                run_web_server_mode();
+            }
             break;
     }
 }

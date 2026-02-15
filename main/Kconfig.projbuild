@@ -24,16 +24,26 @@ menu "Locator Configuration"
 
     config LOCATOR_BOOT_BUTTON_GPIO
         int "Boot button GPIO number"
+        default 9 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6
         default 0
         help
-            GPIO number for the boot button used to enter web server mode.
-            Default is 0 for ESP32, use 9 for ESP32-C3/C6.
+            GPIO number for the boot button used to trigger scan mode from deep sleep.
+            Default is 0 for ESP32/S2/S3, 9 for C2/C3/C6.
 
     config LOCATOR_LED_GPIO
         int "Board LED GPIO number"
+        default 8 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6
         default 2
         help
-            GPIO number for the onboard LED. Lit when web server is running.
-            Default is 2 for most ESP32 devkits.
+            GPIO number for the onboard LED.
+            Default is 2 for ESP32/S2/S3, 8 for C2/C3/C6.
+
+    config LOCATOR_OPEN_WIFI_ENABLED
+        bool "Enable opportunistic open WiFi connection"
+        default y
+        help
+            When enabled, scan mode will attempt to connect to open WiFi
+            networks after scanning, sync time via SNTP, and invoke a
+            user-defined hook before going back to deep sleep.
 
 endmenu

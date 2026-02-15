@@ -294,3 +294,312 @@ esp_err_t scan_store_clear_wifi_creds(void)
     nvs_erase_key(nvs_h, "wifi_pass");
     return nvs_commit(nvs_h);
 }
+
+// --- MQTT configuration ---
+
+static esp_err_t set_str_or_erase(const char *key, const char *val)
+{
+    esp_err_t err;
+    if (val[0] == '\0') {
+        err = nvs_erase_key(nvs_h, key);
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    } else {
+        err = nvs_set_str(nvs_h, key, val);
+    }
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
+esp_err_t scan_store_get_mqtt_url_last(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "mqtt_url_l", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_mqtt_url_last(const char *url)
+{
+    return set_str_or_erase("mqtt_url_l", url);
+}
+
+esp_err_t scan_store_get_mqtt_url_all(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "mqtt_url_a", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_mqtt_url_all(const char *url)
+{
+    return set_str_or_erase("mqtt_url_a", url);
+}
+
+uint16_t scan_store_get_mqtt_wait_cycles(void)
+{
+    uint16_t val;
+    esp_err_t err = nvs_get_u16(nvs_h, "mqtt_wait", &val);
+    if (err != ESP_OK) return 0;
+    return val;
+}
+
+esp_err_t scan_store_set_mqtt_wait_cycles(uint16_t cycles)
+{
+    esp_err_t err = nvs_set_u16(nvs_h, "mqtt_wait", cycles);
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
+esp_err_t scan_store_get_mqtt_client_id(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "mqtt_cid", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_mqtt_client_id(const char *id)
+{
+    return set_str_or_erase("mqtt_cid", id);
+}
+
+esp_err_t scan_store_get_mqtt_username(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "mqtt_user", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_mqtt_username(const char *user)
+{
+    return set_str_or_erase("mqtt_user", user);
+}
+
+esp_err_t scan_store_get_mqtt_password(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "mqtt_pass", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_mqtt_password(const char *pass)
+{
+    return set_str_or_erase("mqtt_pass", pass);
+}
+
+uint16_t scan_store_get_mqtt_cycle_counter(void)
+{
+    uint16_t val;
+    esp_err_t err = nvs_get_u16(nvs_h, "mqtt_cycle", &val);
+    if (err != ESP_OK) return 0;
+    return val;
+}
+
+esp_err_t scan_store_set_mqtt_cycle_counter(uint16_t count)
+{
+    esp_err_t err = nvs_set_u16(nvs_h, "mqtt_cycle", count);
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
+// --- Open WiFi mode/URL ---
+
+uint8_t scan_store_get_open_wifi_mode(void)
+{
+    uint8_t val;
+    esp_err_t err = nvs_get_u8(nvs_h, "ow_mode", &val);
+    if (err != ESP_OK) return OPEN_WIFI_OFF;
+    return val;
+}
+
+esp_err_t scan_store_set_open_wifi_mode(uint8_t mode)
+{
+    esp_err_t err = nvs_set_u8(nvs_h, "ow_mode", mode);
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
+// --- Boot mode ---
+
+uint8_t scan_store_get_boot_mode(void)
+{
+    uint8_t val;
+    esp_err_t err = nvs_get_u8(nvs_h, "boot_mode", &val);
+    if (err != ESP_OK) return BOOT_MODE_WEB;
+    return val;
+}
+
+esp_err_t scan_store_set_boot_mode(uint8_t mode)
+{
+    esp_err_t err = nvs_set_u8(nvs_h, "boot_mode", mode);
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
+esp_err_t scan_store_get_open_wifi_url(char *buf, size_t buf_size)
+{
+    return nvs_get_str(nvs_h, "ow_url", buf, &buf_size);
+}
+
+esp_err_t scan_store_set_open_wifi_url(const char *url)
+{
+    esp_err_t err;
+    if (url[0] == '\0') {
+        err = nvs_erase_key(nvs_h, "ow_url");
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    } else {
+        err = nvs_set_str(nvs_h, "ow_url", url);
+    }
+    if (err != ESP_OK) return err;
+    return nvs_commit(nvs_h);
+}
+
+// --- Open WiFi SSID blocklist (FIFO ring buffer) ---
+
+static void make_bl_key(uint8_t slot, char *key)
+{
+    snprintf(key, 6, "bl%u", slot);
+}
+
+static esp_err_t get_u8_or_default(const char *key, uint8_t *val, uint8_t def)
+{
+    esp_err_t err = nvs_get_u8(nvs_h, key, val);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        *val = def;
+        return ESP_OK;
+    }
+    return err;
+}
+
+bool scan_store_blocklist_contains(const char *ssid)
+{
+    uint8_t count, head;
+    if (get_u8_or_default("bl_count", &count, 0) != ESP_OK) return false;
+    if (get_u8_or_default("bl_head", &head, 0) != ESP_OK) return false;
+    if (count == 0) return false;
+
+    uint8_t n = (count < BLOCKLIST_SIZE) ? count : BLOCKLIST_SIZE;
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t slot = (head + i) % BLOCKLIST_SIZE;
+        char key[6];
+        make_bl_key(slot, key);
+        char buf[33] = {0};
+        size_t buf_size = sizeof(buf);
+        if (nvs_get_str(nvs_h, key, buf, &buf_size) == ESP_OK) {
+            if (strcmp(buf, ssid) == 0) return true;
+        }
+    }
+    return false;
+}
+
+esp_err_t scan_store_blocklist_add(const char *ssid)
+{
+    // Deduplicate
+    if (scan_store_blocklist_contains(ssid)) return ESP_OK;
+
+    uint8_t count, head;
+    esp_err_t err;
+    err = get_u8_or_default("bl_count", &count, 0);
+    if (err != ESP_OK) return err;
+    err = get_u8_or_default("bl_head", &head, 0);
+    if (err != ESP_OK) return err;
+
+    uint8_t slot;
+    if (count < BLOCKLIST_SIZE) {
+        slot = (head + count) % BLOCKLIST_SIZE;
+        count++;
+    } else {
+        // Evict oldest (head), write to that slot, advance head
+        slot = head;
+        head = (head + 1) % BLOCKLIST_SIZE;
+        err = nvs_set_u8(nvs_h, "bl_head", head);
+        if (err != ESP_OK) return err;
+    }
+
+    char key[6];
+    make_bl_key(slot, key);
+    err = nvs_set_str(nvs_h, key, ssid);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_u8(nvs_h, "bl_count", count);
+    if (err != ESP_OK) return err;
+
+    ESP_LOGI(TAG, "Blocklisted SSID '%s' (slot %u)", ssid, slot);
+    return nvs_commit(nvs_h);
+}
+
+esp_err_t scan_store_blocklist_delete(const char *ssid)
+{
+    uint8_t count, head;
+    esp_err_t err;
+    err = get_u8_or_default("bl_count", &count, 0);
+    if (err != ESP_OK) return err;
+    err = get_u8_or_default("bl_head", &head, 0);
+    if (err != ESP_OK) return err;
+    if (count == 0) return ESP_ERR_NOT_FOUND;
+
+    uint8_t n = (count < BLOCKLIST_SIZE) ? count : BLOCKLIST_SIZE;
+    char kept[BLOCKLIST_SIZE][33];
+    int kept_count = 0;
+    bool found = false;
+
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t slot = (head + i) % BLOCKLIST_SIZE;
+        char key[6];
+        make_bl_key(slot, key);
+        char buf[33] = {0};
+        size_t buf_size = sizeof(buf);
+        if (nvs_get_str(nvs_h, key, buf, &buf_size) == ESP_OK) {
+            if (strcmp(buf, ssid) == 0) {
+                found = true;
+            } else {
+                strncpy(kept[kept_count], buf, 33);
+                kept[kept_count][32] = '\0';
+                kept_count++;
+            }
+        }
+    }
+
+    if (!found) return ESP_ERR_NOT_FOUND;
+
+    // Clear all slots and rewrite
+    for (uint8_t i = 0; i < BLOCKLIST_SIZE; i++) {
+        char key[6];
+        make_bl_key(i, key);
+        nvs_erase_key(nvs_h, key);
+    }
+    for (int i = 0; i < kept_count; i++) {
+        char key[6];
+        make_bl_key(i, key);
+        nvs_set_str(nvs_h, key, kept[i]);
+    }
+
+    nvs_set_u8(nvs_h, "bl_head", 0);
+    nvs_set_u8(nvs_h, "bl_count", (uint8_t)kept_count);
+    ESP_LOGI(TAG, "Removed '%s' from blocklist (%d remaining)", ssid, kept_count);
+    return nvs_commit(nvs_h);
+}
+
+esp_err_t scan_store_blocklist_clear(void)
+{
+    uint8_t count;
+    get_u8_or_default("bl_count", &count, 0);
+
+    for (uint8_t i = 0; i < BLOCKLIST_SIZE; i++) {
+        char key[6];
+        make_bl_key(i, key);
+        nvs_erase_key(nvs_h, key);
+    }
+    nvs_erase_key(nvs_h, "bl_count");
+    nvs_erase_key(nvs_h, "bl_head");
+    return nvs_commit(nvs_h);
+}
+
+int scan_store_blocklist_list(char ssids[][33], int max_entries)
+{
+    uint8_t count, head;
+    if (get_u8_or_default("bl_count", &count, 0) != ESP_OK) return 0;
+    if (get_u8_or_default("bl_head", &head, 0) != ESP_OK) return 0;
+    if (count == 0) return 0;
+
+    uint8_t n = (count < BLOCKLIST_SIZE) ? count : BLOCKLIST_SIZE;
+    int result = 0;
+    for (uint8_t i = 0; i < n && result < max_entries; i++) {
+        uint8_t slot = (head + i) % BLOCKLIST_SIZE;
+        char key[6];
+        make_bl_key(slot, key);
+        size_t buf_size = 33;
+        if (nvs_get_str(nvs_h, key, ssids[result], &buf_size) == ESP_OK) {
+            result++;
+        }
+    }
+    return result;
+}

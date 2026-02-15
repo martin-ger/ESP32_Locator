@@ -11,16 +11,21 @@ If you don't have an API key or if you don't want to deploy it on an embedded de
 
 The device operates in two modes, selected automatically by the wakeup cause:
 
-### Scan Mode (timer wakeup)
+### Scan Mode (timer wakeup, or power-on if configured)
 
 1. ESP32 wakes from deep sleep
 2. Performs an active WiFi scan (no connection needed)
 3. Stores discovered access points (BSSID, RSSI, channel, auth mode, SSID) to NVS
-4. Returns to deep sleep for the configured interval (default 60s)
+4. If open WiFi mode is enabled, attempts to connect for SNTP/MQTT:
+   - **Home WiFi first**: if the configured home WiFi (SSID + password from the Config page) appears in the scan results, connects to it with password authentication -- preferred over open networks
+   - **Open WiFi fallback**: if home WiFi is unavailable or not configured, tries open networks from the scan results as before
+   - **Sync only**: SNTP time sync
+   - **MQTT + Sync**: publish scan data to configured MQTT broker, then SNTP sync
+5. Returns to deep sleep for the configured interval (default 60s)
 
-Scans with zero APs are discarded. When NVS storage reaches capacity, the oldest scan is evicted.
+Scans with zero APs are discarded. When NVS storage reaches capacity, the oldest scan is evicted. Open networks that require passwords or fail captive portal handling are automatically blocklisted.
 
-### Web Server Mode (button press or power-on)
+### Web Server Mode (button press, or power-on if configured)
 
 1. Attempts to connect to a stored WiFi network (STA mode)
 2. If no credentials are stored or connection fails after 5 retries, starts a SoftAP captive portal ("ESP32_Locator", open, 192.168.4.1)
@@ -35,8 +40,19 @@ From the web UI you can:
 - **Geolocate** -- sends scan data to the Google Geolocation API, displays coordinates and accuracy, renders position on an embedded Google Map. Results are cached in NVS so repeat views are instant without another API call
 - **Export** -- downloads all scan data (including cached locations) as a JSON file named `LocatorScan_<date>_<time>.json`
 - **Configure WiFi** -- scan for nearby networks, select and enter credentials; the device reboots into STA mode. "Forget" clears stored credentials and reboots into AP mode
-- **Configure settings** -- set the Google API key (masked input) and scan interval (10--3600 seconds)
-- **Start Scanning** -- triggers deep sleep to begin scan cycles; press the BOOT button to return to web server mode
+- **Configure Open WiFi** -- set the open WiFi mode (off / sync only / MQTT + sync), manage the SSID blocklist
+- **Configure MQTT** -- set broker URLs for last scan and all scans (format: `mqtt://broker:port/topic/path`), wait cycles for "publish all", client ID, username, and password
+- **Configure settings** -- set the Google API key, web password (HTTP Basic Auth), scan interval (10--3600 seconds), and default boot mode
+- **Start Scanning** -- triggers deep sleep to begin scan cycles; resets the MQTT publish cycle counter; press the BOOT button to return to web server mode
+
+### Default Boot Mode
+
+On power-on or reset, the device enters web server mode by default. This can be changed in the Config page under **DEFAULT_BOOT_MODE**:
+
+- **Web Server** (default) -- power-on starts the web server
+- **Scan Mode** -- power-on enters scan mode immediately, useful for battery-powered deployments where the device should start scanning without manual intervention
+
+Pressing the BOOT button during deep sleep always enters web server mode, regardless of this setting. Timer wakeup always enters scan mode.
 
 ### First Boot (or after "Forget")
 
@@ -123,9 +139,11 @@ No compile-time WiFi configuration is needed -- credentials are set at runtime t
 | `LOCATOR_BOOT_BUTTON_GPIO` | 0 | -- | GPIO for boot button (9 for C3/C6) |
 | `LOCATOR_LED_GPIO` | 2 | -- | GPIO for onboard LED |
 
+| `LOCATOR_OPEN_WIFI_ENABLED` | y | -- | Enable opportunistic open WiFi connection |
+
 ### Runtime Settings (Web UI)
 
-The scan interval, Google API key, and WiFi credentials can be changed at runtime through the Config page. All settings are stored in NVS and persist across reboots.
+The default boot mode, scan interval, Google API key, web password, WiFi credentials, open WiFi mode, MQTT configuration, and blocklist can all be changed at runtime through the Config page. All settings are stored in NVS and persist across reboots and deep sleep cycles.
 
 ## Google API Setup
 
@@ -143,7 +161,9 @@ Uses a custom partition table with 512KB NVS on 4MB flash. Data stored in NVS:
 - **Scan data** -- compact binary blobs in a ring buffer (11-byte header + N x 42-byte AP records). A scan with 10 APs is ~431 bytes.
 - **Location cache** -- 24-byte blob per geolocated scan (lat, lng, accuracy as doubles). Cached on first API call, served directly on subsequent requests.
 - **WiFi credentials** -- SSID and password strings.
-- **Settings** -- API key and scan interval.
+- **Settings** -- API key, scan interval, web password, default boot mode.
+- **Open WiFi config** -- mode, MQTT URLs, MQTT credentials, cycle counter.
+- **Blocklist** -- FIFO ring buffer of 10 open WiFi SSIDs to skip.
 
 With 512KB NVS, approximately 500 scans with locations fit comfortably.
 
@@ -158,33 +178,85 @@ With 512KB NVS, approximately 500 scans with locations fit comfortably.
 | POST | `/api/locate?id=N` | Geolocate scan (cached after first call) |
 | DELETE | `/api/scan?id=N` | Delete one scan |
 | DELETE | `/api/scans` | Delete all scans |
-| GET | `/api/settings` | Get scan interval and whether API key is set |
-| POST | `/api/settings` | Save API key and scan interval |
-| POST | `/api/sleep` | Enter deep sleep (start scanning) |
+| GET | `/api/settings` | Get all settings (API key, MQTT, scan interval, etc.) |
+| POST | `/api/settings` | Save settings (JSON body) |
+| POST | `/api/sleep` | Enter deep sleep (start scanning), resets MQTT cycle counter |
 | GET | `/api/wifi/status` | Current WiFi mode, IP, SSID |
 | GET | `/api/wifi/scan` | Scan for nearby WiFi networks |
 | POST | `/api/wifi/connect` | Save WiFi credentials and reboot |
 | POST | `/api/wifi/forget` | Clear WiFi credentials and reboot to AP mode |
+| GET | `/api/blocklist` | List blocklisted open WiFi SSIDs |
+| DELETE | `/api/blocklist` | Clear entire blocklist |
+| DELETE | `/api/blocklist?ssid=X` | Delete single blocklist entry |
 
 ## Project Structure
 
 ```
 main/
-  main.c              App entry point, mode selection, deep sleep, SNTP sync
+  main.c              App entry point, mode selection, deep sleep, MQTT hook
   wifi_scan.c/h       WiFi scanning (STA mode, no connection)
   wifi_connect.c/h    WiFi connection management (STA + SoftAP fallback)
-  scan_store.c/h      NVS storage: scans, locations, settings, WiFi credentials
+  scan_store.c/h      NVS storage: scans, locations, settings, MQTT config, blocklist
   web_server.c/h      HTTP server and all URI handlers (CORS enabled)
   geolocation.c/h     Google Geolocation API client (HTTPS + cJSON)
+  open_wifi.c/h       Opportunistic open WiFi connection + captive portal handling
+  mqtt_publish.c/h    MQTT client: publish scans as retained JSON to broker
   Kconfig.projbuild   Menuconfig options
   CMakeLists.txt      Build config, embedded files
   pages/
     index.html        Single-page web UI (Matrix-themed)
     favicon.png       Browser tab icon
 locator.html          Standalone local analyzer (see below)
+mqtt_sub.sh           Shell script: subscribe to MQTT topic, save JSON for locator.html
 partitions.csv        Custom partition table (512KB NVS, 4MB flash)
 sdkconfig.defaults    Flash size, partition table, TLS cert bundle, WiFi scan sorting
 ```
+
+## Home WiFi in Scan Mode
+
+When open WiFi mode is enabled (sync only or MQTT + sync) and the device has stored WiFi credentials (configured via the Config page), the device will prefer connecting to the home WiFi network during scan mode. If the configured SSID appears in the scan results, the device connects using the stored password for SNTP sync and optional MQTT publishing -- the same actions it would perform on an open network, but with authenticated access and no captive portal handling. If the home network is not found in the scan results, the device falls through to open WiFi as usual.
+
+## Open WiFi Mode
+
+When enabled (`Config > OPEN_WIFI_MODE`), the device opportunistically connects to open WiFi networks detected during scans. Three modes are available:
+
+- **Off** -- no open WiFi connections
+- **Sync only** -- connect to an open network, sync time via SNTP, disconnect
+- **MQTT + Sync** -- connect, publish scan data via MQTT, sync time, disconnect
+
+The device automatically handles captive portals by parsing and submitting HTML forms. Networks that require passwords, fail portal handling, or don't provide internet access are added to a blocklist (FIFO, 10 slots) and skipped in future cycles. The blocklist can be managed from the Config page.
+
+## MQTT Publishing
+
+When open WiFi mode is set to "MQTT + Sync", the device publishes scan data to an MQTT broker after connecting to an open network.
+
+### Configuration (Web UI)
+
+- **MQTT_URL_LAST_SCAN** -- broker URL with topic for the latest scan (e.g., `mqtt://broker:1883/locator/last`)
+- **MQTT_URL_ALL_SCANS** -- broker URL with topic for all scans (e.g., `mqtt://broker:1883/locator/all`)
+- **WAIT_CYCLES_FOR_ALL** -- number of scan cycles between "publish all" operations (0 = every cycle)
+- **MQTT_CLIENT_ID** -- client identifier sent to the broker
+- **MQTT_USERNAME / MQTT_PASSWORD** -- broker authentication credentials
+
+The URL format is `mqtt://host:port/topic/path` (or `mqtts://` for TLS). The path portion after the third `/` is used as the MQTT topic.
+
+### Publish Behavior
+
+- **Last scan**: published every cycle as a retained QoS 0 message (single JSON object)
+- **All scans**: published every N cycles as a retained QoS 0 message (JSON array)
+- The cycle counter resets each time scan mode is started from the web UI
+- If both URLs point to the same broker, a single connection is reused
+- JSON format matches the `/api/scan` endpoint (id, timestamp, aps with ssid/bssid/rssi/channel/auth, location if cached)
+
+### Receiving Scans (`mqtt_sub.sh`)
+
+A helper script subscribes to the MQTT topic and saves the message as a JSON file compatible with `locator.html`:
+
+```bash
+./mqtt_sub.sh mqtt://broker:1883/locator/last username password ./scans
+```
+
+The script reads one retained message, wraps single scan objects in an array if needed, and saves to `LocatorScan_<timestamp>.json`. Open the file in `locator.html` via "Import JSON".
 
 ## Local Analyzer (`locator.html`)
 
@@ -193,7 +265,7 @@ A standalone HTML/JS application that runs entirely in a local browser, independ
 ### Data Sources
 
 - **Connect to ESP** -- enter the ESP32's IP address to fetch all scans over the local network (requires the ESP to be in web server mode). CORS headers on the ESP allow cross-origin access.
-- **Import JSON** -- load a previously exported scan file. Location data included in the export is restored automatically, and already-located scans are marked in the overview.
+- **Import JSON** -- load a previously exported scan file or a file saved by `mqtt_sub.sh`. Location data included in the export is restored automatically, and already-located scans are marked in the overview.
 
 ### Features
 

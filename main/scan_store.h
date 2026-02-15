@@ -65,3 +65,42 @@ esp_err_t scan_store_get_wifi_pass(char *buf, size_t buf_size);
 esp_err_t scan_store_set_wifi_pass(const char *pass);
 bool      scan_store_has_wifi_creds(void);
 esp_err_t scan_store_clear_wifi_creds(void);
+
+// Default boot mode: 0=web server, 1=scan mode
+#define BOOT_MODE_WEB   0
+#define BOOT_MODE_SCAN  1
+uint8_t   scan_store_get_boot_mode(void);
+esp_err_t scan_store_set_boot_mode(uint8_t mode);
+
+// Open WiFi mode: 0=off, 1=sync only, 2=request+sync
+#define OPEN_WIFI_OFF  0
+#define OPEN_WIFI_SYNC 1
+#define OPEN_WIFI_REQ  2
+uint8_t   scan_store_get_open_wifi_mode(void);
+esp_err_t scan_store_set_open_wifi_mode(uint8_t mode);
+esp_err_t scan_store_get_open_wifi_url(char *buf, size_t buf_size);
+esp_err_t scan_store_set_open_wifi_url(const char *url);
+
+// MQTT configuration
+esp_err_t scan_store_get_mqtt_url_last(char *buf, size_t buf_size);
+esp_err_t scan_store_set_mqtt_url_last(const char *url);
+esp_err_t scan_store_get_mqtt_url_all(char *buf, size_t buf_size);
+esp_err_t scan_store_set_mqtt_url_all(const char *url);
+uint16_t  scan_store_get_mqtt_wait_cycles(void);
+esp_err_t scan_store_set_mqtt_wait_cycles(uint16_t cycles);
+esp_err_t scan_store_get_mqtt_client_id(char *buf, size_t buf_size);
+esp_err_t scan_store_set_mqtt_client_id(const char *id);
+esp_err_t scan_store_get_mqtt_username(char *buf, size_t buf_size);
+esp_err_t scan_store_set_mqtt_username(const char *user);
+esp_err_t scan_store_get_mqtt_password(char *buf, size_t buf_size);
+esp_err_t scan_store_set_mqtt_password(const char *pass);
+uint16_t  scan_store_get_mqtt_cycle_counter(void);
+esp_err_t scan_store_set_mqtt_cycle_counter(uint16_t count);
+
+// Open WiFi SSID blocklist (FIFO ring buffer, 10 slots)
+#define BLOCKLIST_SIZE 10
+bool      scan_store_blocklist_contains(const char *ssid);
+esp_err_t scan_store_blocklist_add(const char *ssid);
+esp_err_t scan_store_blocklist_delete(const char *ssid);
+esp_err_t scan_store_blocklist_clear(void);
+int       scan_store_blocklist_list(char ssids[][33], int max_entries);

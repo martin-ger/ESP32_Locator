@@ -443,6 +443,39 @@ static esp_err_t api_settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(resp, "api_key_set", key_set);
     cJSON_AddBoolToObject(resp, "web_pass_set", pass_set);
     cJSON_AddNumberToObject(resp, "scan_interval", scan_store_get_scan_interval());
+    cJSON_AddNumberToObject(resp, "boot_mode", scan_store_get_boot_mode());
+
+#ifdef CONFIG_LOCATOR_OPEN_WIFI_ENABLED
+    cJSON_AddNumberToObject(resp, "open_wifi_mode", scan_store_get_open_wifi_mode());
+
+    char mqtt_buf[257] = {0};
+    if (scan_store_get_mqtt_url_last(mqtt_buf, sizeof(mqtt_buf)) == ESP_OK)
+        cJSON_AddStringToObject(resp, "mqtt_url_last", mqtt_buf);
+    else
+        cJSON_AddStringToObject(resp, "mqtt_url_last", "");
+
+    if (scan_store_get_mqtt_url_all(mqtt_buf, sizeof(mqtt_buf)) == ESP_OK)
+        cJSON_AddStringToObject(resp, "mqtt_url_all", mqtt_buf);
+    else
+        cJSON_AddStringToObject(resp, "mqtt_url_all", "");
+
+    cJSON_AddNumberToObject(resp, "mqtt_wait_cycles", scan_store_get_mqtt_wait_cycles());
+
+    char mqtt_str[65] = {0};
+    if (scan_store_get_mqtt_client_id(mqtt_str, sizeof(mqtt_str)) == ESP_OK)
+        cJSON_AddStringToObject(resp, "mqtt_client_id", mqtt_str);
+    else
+        cJSON_AddStringToObject(resp, "mqtt_client_id", "");
+
+    if (scan_store_get_mqtt_username(mqtt_str, sizeof(mqtt_str)) == ESP_OK)
+        cJSON_AddStringToObject(resp, "mqtt_username", mqtt_str);
+    else
+        cJSON_AddStringToObject(resp, "mqtt_username", "");
+
+    char mqtt_pass[65] = {0};
+    bool mqtt_pass_set = (scan_store_get_mqtt_password(mqtt_pass, sizeof(mqtt_pass)) == ESP_OK && mqtt_pass[0]);
+    cJSON_AddBoolToObject(resp, "mqtt_password_set", mqtt_pass_set);
+#endif
 
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
@@ -457,12 +490,12 @@ static esp_err_t api_settings_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// POST /api/settings — save API key, password, scan interval
+// POST /api/settings — save API key, password, scan interval, open WiFi mode/URL
 static esp_err_t api_settings_post_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
     if (!check_auth(req)) return ESP_OK;
-    char body[256];
+    char body[768];
     int received = httpd_req_recv(req, body, sizeof(body) - 1);
     if (received <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
@@ -494,6 +527,48 @@ static esp_err_t api_settings_post_handler(httpd_req_t *req)
         }
     }
 
+    cJSON *boot_mode = cJSON_GetObjectItem(json, "boot_mode");
+    if (boot_mode && cJSON_IsNumber(boot_mode)) {
+        int val = boot_mode->valueint;
+        if (val == BOOT_MODE_WEB || val == BOOT_MODE_SCAN) {
+            scan_store_set_boot_mode((uint8_t)val);
+        }
+    }
+
+#ifdef CONFIG_LOCATOR_OPEN_WIFI_ENABLED
+    cJSON *ow_mode = cJSON_GetObjectItem(json, "open_wifi_mode");
+    if (ow_mode && cJSON_IsNumber(ow_mode)) {
+        int val = ow_mode->valueint;
+        if (val >= 0 && val <= 2) {
+            scan_store_set_open_wifi_mode((uint8_t)val);
+        }
+    }
+
+    cJSON *mqtt_url_last = cJSON_GetObjectItem(json, "mqtt_url_last");
+    if (mqtt_url_last && cJSON_IsString(mqtt_url_last))
+        scan_store_set_mqtt_url_last(mqtt_url_last->valuestring);
+
+    cJSON *mqtt_url_all = cJSON_GetObjectItem(json, "mqtt_url_all");
+    if (mqtt_url_all && cJSON_IsString(mqtt_url_all))
+        scan_store_set_mqtt_url_all(mqtt_url_all->valuestring);
+
+    cJSON *mqtt_wait = cJSON_GetObjectItem(json, "mqtt_wait_cycles");
+    if (mqtt_wait && cJSON_IsNumber(mqtt_wait))
+        scan_store_set_mqtt_wait_cycles((uint16_t)mqtt_wait->valueint);
+
+    cJSON *mqtt_cid = cJSON_GetObjectItem(json, "mqtt_client_id");
+    if (mqtt_cid && cJSON_IsString(mqtt_cid))
+        scan_store_set_mqtt_client_id(mqtt_cid->valuestring);
+
+    cJSON *mqtt_user = cJSON_GetObjectItem(json, "mqtt_username");
+    if (mqtt_user && cJSON_IsString(mqtt_user))
+        scan_store_set_mqtt_username(mqtt_user->valuestring);
+
+    cJSON *mqtt_pass_val = cJSON_GetObjectItem(json, "mqtt_password");
+    if (mqtt_pass_val && cJSON_IsString(mqtt_pass_val))
+        scan_store_set_mqtt_password(mqtt_pass_val->valuestring);
+#endif
+
     cJSON_Delete(json);
     esp_err_t err = ESP_OK;
 
@@ -514,6 +589,9 @@ static esp_err_t api_sleep_handler(httpd_req_t *req)
     if (!check_auth(req)) return ESP_OK;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true,\"msg\":\"Entering deep sleep...\"}");
+
+    // Reset MQTT cycle counter when starting a new scan session
+    scan_store_set_mqtt_cycle_counter(0);
 
     // Small delay so the response gets sent before we sleep
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -615,6 +693,58 @@ static esp_err_t api_wifi_connect_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// GET /api/blocklist — list blocklisted SSIDs
+static esp_err_t api_blocklist_get_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
+
+    char ssids[BLOCKLIST_SIZE][33];
+    int count = scan_store_blocklist_list(ssids, BLOCKLIST_SIZE);
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < count; i++) {
+        cJSON_AddItemToArray(arr, cJSON_CreateString(ssids[i]));
+    }
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON error");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_OK;
+}
+
+// DELETE /api/blocklist — clear all, or ?ssid=X to delete single entry
+static esp_err_t api_blocklist_delete_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    if (!check_auth(req)) return ESP_OK;
+
+    char buf[128];
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+        char ssid[33];
+        if (httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid)) == ESP_OK) {
+            esp_err_t err = scan_store_blocklist_delete(ssid);
+            if (err != ESP_OK) {
+                httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "SSID not in blocklist");
+                return ESP_OK;
+            }
+        }
+    } else {
+        scan_store_blocklist_clear();
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 // POST /api/wifi/forget — clear credentials and reboot to AP mode
 static esp_err_t api_wifi_forget_handler(httpd_req_t *req)
 {
@@ -672,6 +802,12 @@ static const httpd_uri_t uri_wifi_connect = {
 static const httpd_uri_t uri_wifi_forget = {
     .uri = "/api/wifi/forget", .method = HTTP_POST, .handler = api_wifi_forget_handler
 };
+static const httpd_uri_t uri_blocklist_get = {
+    .uri = "/api/blocklist", .method = HTTP_GET, .handler = api_blocklist_get_handler
+};
+static const httpd_uri_t uri_blocklist_delete = {
+    .uri = "/api/blocklist", .method = HTTP_DELETE, .handler = api_blocklist_delete_handler
+};
 static const httpd_uri_t uri_api_options = {
     .uri = "/api/*", .method = HTTP_OPTIONS, .handler = api_options_handler
 };
@@ -680,7 +816,7 @@ httpd_handle_t web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 17;
+    config.max_uri_handlers = 19;
     config.stack_size = 10240;  // TLS handshake for Google API needs extra stack
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -706,6 +842,8 @@ httpd_handle_t web_server_start(void)
     httpd_register_uri_handler(server, &uri_wifi_scan);
     httpd_register_uri_handler(server, &uri_wifi_connect);
     httpd_register_uri_handler(server, &uri_wifi_forget);
+    httpd_register_uri_handler(server, &uri_blocklist_get);
+    httpd_register_uri_handler(server, &uri_blocklist_delete);
     httpd_register_uri_handler(server, &uri_api_options);
 
     ESP_LOGI(TAG, "Web server started");

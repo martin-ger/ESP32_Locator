@@ -318,7 +318,7 @@ function renderScans() {
       : '<button onclick="locateScan('+s.id+')">Locate</button>';
     const dist = distances[s.id] !== undefined ? fmtDist(distances[s.id]) : '-';
     h += `<tr><td>${String(s.id).padStart(5,'0')}</td><td>${ts(s.timestamp)}</td><td>${s.aps}</td><td${dclass}>${d}</td><td>${dist}</td>
-      <td><button onclick="viewScan(${s.id})">View</button> ${locBtn}</td></tr>`;
+      <td><button onclick="viewScan(${s.id})">Scan</button> ${locBtn}</td></tr>`;
   });
   h += '</table>';
   $('#scan-list').innerHTML = h;
@@ -376,7 +376,7 @@ async function locateScan(id) {
   const apiKey = getApiKey();
   if (!apiKey) {
     $('#map-info').innerHTML = '<span class="msg err">No API key configured. Set it in the Connect tab.</span>';
-    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scan</button>`);
     return;
   }
 
@@ -395,13 +395,13 @@ async function locateScan(id) {
       scanDetails[id] = detail;
     } catch(e) {
       $('#map-info').innerHTML = `<span class="msg err">FETCH_FAILED: ${e.message}</span>`;
-      $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+      $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scan</button>`);
       return;
     }
   }
   if (!detail) {
     $('#map-info').innerHTML = '<span class="msg err">Scan data not available</span>';
-    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scan</button>`);
     return;
   }
 
@@ -423,7 +423,7 @@ async function locateScan(id) {
     if (!r.ok) {
       const errText = await r.text();
       $('#map-info').innerHTML = `<span class="msg err">GEOLOCATION_FAILED (${r.status}): ${errText}</span>`;
-      $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+      $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scan</button>`);
       return;
     }
 
@@ -433,7 +433,7 @@ async function locateScan(id) {
     showLocation(id, loc, false);
   } catch(e) {
     $('#map-info').innerHTML = `<span class="msg err">REQUEST_FAILED: ${e.message}</span>`;
-    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+    $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scan</button>`);
   }
 }
 
@@ -444,7 +444,7 @@ function showLocation(id, loc, cached) {
   if (apiKey) {
     $('#map-frame').src = `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${loc.lat},${loc.lng}&zoom=16`;
   }
-  $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+  $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scan</button>`);
 }
 
 // ---- Locate All ----

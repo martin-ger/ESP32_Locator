@@ -35,6 +35,9 @@ button.go:hover{background:#00ff4125;box-shadow:0 0 12px #00ff4130}
 input[type=text],input[type=password]{background:#001a00;border:1px solid #003b00;color:#00ff41;padding:6px 10px;width:100%;max-width:420px;font-family:inherit;font-size:.9em;transition:border-color .2s}
 input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#00ff41;box-shadow:0 0 8px #00ff4130}
 input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
+select{background:#001a00;border:1px solid #003b00;color:#00ff41;padding:6px 10px;font-family:inherit;font-size:.9em;transition:border-color .2s;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2300ff41'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+select:focus{outline:none;border-color:#00ff41;box-shadow:0 0 8px #00ff4130}
+select option{background:#001a00;color:#00ff41}
 .msg{padding:8px 12px;margin:8px 0;font-size:.85em;border:1px solid}
 .msg.ok{border-color:#003b00;color:#00ff41;background:#00ff4110}
 .msg.err{border-color:#3b0000;color:#ff4141;background:#ff414110}
@@ -53,12 +56,12 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <h1>ESP32_LOCATOR<span class="cursor"></span></h1>
 <div class="subtitle">// WiFi reconnaissance & geolocation system</div>
 <nav>
-<button onclick="showView('scans')" id="nav-scans">[ Scans ]</button>
 <button onclick="showView('settings')" id="nav-settings">[ Config ]</button>
-<button onclick="startScanning()" class="go" style="margin-left:auto">[ Start Scanning ]</button>
+<button onclick="showView('scans')" id="nav-scans">[ Scan ]</button>
+<button onclick="startScanning()" class="go" style="margin-left:auto">[ Scan Mode ]</button>
 </nav>
 
-<div id="v-scans" class="view active">
+<div id="v-scans" class="view">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
 <h2>&gt; stored_scans</h2>
 <div><button onclick="exportScans()">Export</button> <button class="danger" onclick="deleteAll()">Purge All</button></div>
@@ -67,7 +70,10 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 </div>
 
 <div id="v-detail" class="view">
-<button onclick="showView('scans')" style="margin-bottom:10px">&lt; back</button>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+<button onclick="showView('scans')">&lt; back</button>
+<button class="danger" onclick="deleteFromDetail()">Del</button>
+</div>
 <h2>&gt; scan_data [<span id="detail-id"></span>]</h2>
 <p class="info" id="detail-time"></p>
 <div id="detail-aps"></div>
@@ -75,15 +81,34 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 </div>
 
 <div id="v-map" class="view">
-<button onclick="showView('scans')" style="margin-bottom:10px">&lt; back</button>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+<button onclick="showView('scans')">&lt; back</button>
+<button class="danger" onclick="deleteFromMap()">Del</button>
+</div>
 <h2>&gt; location [<span id="map-id"></span>]</h2>
 <div class="panel" id="map-info" style="margin-bottom:8px"></div>
 <iframe id="map-frame" frameborder="0" allowfullscreen></iframe>
 <div id="map-nav" style="display:flex;justify-content:space-between;margin-top:10px"></div>
 </div>
 
-<div id="v-settings" class="view">
+<div id="v-settings" class="view active">
 <h2>&gt; configuration</h2>
+<div id="save-msg"></div>
+<div class="panel">
+<label class="info">DEFAULT_BOOT_MODE</label>
+<div style="margin-top:4px">
+<select id="boot-mode">
+<option value="0">Web Server</option>
+<option value="1">Scan Mode</option>
+</select>
+</div>
+<label class="info" style="margin-top:14px;display:block">SCAN_INTERVAL_SEC</label>
+<div style="display:flex;gap:8px;margin-top:4px;align-items:center">
+<input type="text" id="scan-interval" placeholder="60" style="max-width:120px">
+<span class="info">range: 10-3600</span>
+</div>
+<div style="margin-top:14px"><button class="go" onclick="saveSettings()">[ Save ]</button></div>
+</div>
 <div class="panel">
 <label class="info">WIFI_CONNECTION</label>
 <div id="wifi-status" style="margin:6px 0;font-size:.85em"></div>
@@ -102,6 +127,48 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <div id="wifi-msg"></div>
 </div>
 <div class="panel">
+<label class="info">OPEN_WIFI_MODE</label>
+<div style="margin-top:4px">
+<select id="ow-mode" onchange="owModeChanged()">
+<option value="0">Off</option>
+<option value="1">Sync only</option>
+<option value="2">MQTT + Sync</option>
+</select>
+</div>
+<div id="mqtt-section" style="margin-top:10px;display:none">
+<label class="info">MQTT_URL_LAST_SCAN</label>
+<div style="margin-top:4px">
+<input type="text" id="mqtt-url-last" placeholder="mqtt://broker:1883/topic/last" autocomplete="off">
+</div>
+<label class="info" style="margin-top:10px;display:block">MQTT_URL_ALL_SCANS</label>
+<div style="margin-top:4px">
+<input type="text" id="mqtt-url-all" placeholder="mqtt://broker:1883/topic/all" autocomplete="off">
+</div>
+<label class="info" style="margin-top:10px;display:block">WAIT_CYCLES_FOR_ALL</label>
+<div style="display:flex;gap:8px;margin-top:4px;align-items:center">
+<input type="text" id="mqtt-wait" placeholder="10" style="max-width:120px" autocomplete="off">
+<span class="info">0 = every cycle</span>
+</div>
+<label class="info" style="margin-top:10px;display:block">MQTT_CLIENT_ID</label>
+<div style="margin-top:4px">
+<input type="text" id="mqtt-cid" placeholder="esp32_locator" autocomplete="off">
+</div>
+<label class="info" style="margin-top:10px;display:block">MQTT_USERNAME</label>
+<div style="margin-top:4px">
+<input type="text" id="mqtt-user" placeholder="username" autocomplete="off">
+</div>
+<label class="info" style="margin-top:10px;display:block">MQTT_PASSWORD</label>
+<div style="margin-top:4px">
+<input type="password" id="mqtt-pass" placeholder="password" autocomplete="off">
+</div>
+</div>
+<div id="ow-blocklist-section" style="margin-top:14px">
+<label class="info">BLOCKLIST</label>
+<div id="ow-blocklist" style="margin:4px 0;font-size:.85em"></div>
+</div>
+<div style="margin-top:14px"><button class="go" onclick="saveSettings()">[ Save ]</button></div>
+</div>
+<div class="panel">
 <label class="info">GOOGLE_API_KEY</label>
 <div style="margin-top:4px">
 <input type="password" id="api-key" placeholder="enter_api_key" autocomplete="off">
@@ -114,13 +181,7 @@ input[type=text]::placeholder,input[type=password]::placeholder{color:#004d00}
 <input type="password" id="web-pass-confirm" placeholder="confirm_password" autocomplete="off">
 </div>
 <div style="margin-top:6px"><button class="danger" onclick="clearPassword()">[ Clear Password ]</button> <span id="pass-status"></span></div>
-<label class="info" style="margin-top:14px;display:block">SCAN_INTERVAL_SEC</label>
-<div style="display:flex;gap:8px;margin-top:4px;align-items:center">
-<input type="text" id="scan-interval" placeholder="60" style="max-width:120px">
-<span class="info">range: 10-3600</span>
-</div>
 <div style="margin-top:14px"><button class="go" onclick="saveSettings()">[ Save ]</button></div>
-<div id="settings-msg"></div>
 </div>
 </div>
 
@@ -168,6 +229,8 @@ function fmtDist(km) {
 }
 
 let scanData = [];
+let currentDetailId = null;
+let currentMapId = null;
 
 async function loadScans() {
   const r = await fetch('/api/scans');
@@ -198,7 +261,7 @@ async function loadScans() {
     const locBtn = located ? '<button onclick="locateScan('+s.id+')" style="font-weight:bold;border-color:#00ff41;color:#00ff41">Locate</button>' : '<button onclick="locateScan('+s.id+')">Locate</button>';
     const dist = distances[s.id] !== undefined ? fmtDist(distances[s.id]) : '-';
     h += `<tr><td>${String(s.id).padStart(5,'0')}</td><td>${ts(s.timestamp)}</td><td>${s.aps}</td><td${dclass}>${d}</td><td>${dist}</td><td>
-      <button onclick="viewScan(${s.id})">View</button>
+      <button onclick="viewScan(${s.id})">Scan</button>
       ${locBtn}
       <button class="danger" onclick="deleteScan(${s.id})">Del</button></td></tr>`;
   });
@@ -217,6 +280,7 @@ function navButtons(id, fn, midBtn) {
 }
 
 async function viewScan(id) {
+  currentDetailId = id;
   const r = await fetch('/api/scan?id='+id);
   const data = await r.json();
   $('#detail-id').textContent = String(id).padStart(5,'0');
@@ -233,6 +297,7 @@ async function viewScan(id) {
 }
 
 async function locateScan(id) {
+  currentMapId = id;
   showView('map');
   $('#map-id').textContent = String(id).padStart(5,'0');
   $('#map-info').innerHTML = '<span class="glow">Requesting geolocation...</span><span class="cursor"></span>';
@@ -255,7 +320,7 @@ async function locateScan(id) {
   } catch(e) {
     $('#map-info').innerHTML = `<span class="msg err">CONNECTION_FAILED: ${e.message}</span>`;
   }
-  $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">View</button>`);
+  $('#map-nav').innerHTML = navButtons(id, 'locateScan', `<button onclick="viewScan(${id})">Scans</button>`);
 }
 
 async function deleteScan(id) {
@@ -308,7 +373,25 @@ async function loadSettings() {
   $('#web-pass-confirm').placeholder = data.web_pass_set ? '(confirm)' : 'confirm_password';
   $('#pass-status').innerHTML = data.web_pass_set ? '<span class="tag" style="border-color:#ffaa00;color:#ffaa00">LOCKED</span>' : '';
   $('#scan-interval').value = data.scan_interval || 60;
+  $('#boot-mode').value = data.boot_mode || 0;
+  if (data.open_wifi_mode !== undefined) {
+    $('#ow-mode').value = data.open_wifi_mode;
+    $('#mqtt-url-last').value = data.mqtt_url_last || '';
+    $('#mqtt-url-all').value = data.mqtt_url_all || '';
+    $('#mqtt-wait').value = data.mqtt_wait_cycles || 0;
+    $('#mqtt-cid').value = data.mqtt_client_id || '';
+    $('#mqtt-user').value = data.mqtt_username || '';
+    $('#mqtt-pass').value = '';
+    $('#mqtt-pass').placeholder = data.mqtt_password_set ? '(password set)' : 'password';
+    owModeChanged();
+    loadBlocklist();
+  }
   loadWifiStatus();
+}
+
+function owModeChanged() {
+  const mode = parseInt($('#ow-mode').value);
+  $('#mqtt-section').style.display = mode === 2 ? 'block' : 'none';
 }
 
 async function loadWifiStatus() {
@@ -380,26 +463,34 @@ async function saveSettings() {
   const passConfirm = $('#web-pass-confirm').value;
   const ivl = parseInt($('#scan-interval').value) || 60;
   if (pass !== '' && pass !== passConfirm) {
-    $('#settings-msg').innerHTML = '<p class="msg err">PASSWORDS_DO_NOT_MATCH</p>';
-    setTimeout(() => $('#settings-msg').innerHTML = '', 4000);
+    $('#save-msg').innerHTML = '<p class="msg err">PASSWORDS_DO_NOT_MATCH</p>';
+    setTimeout(() => $('#save-msg').innerHTML = '', 4000);
     return;
   }
   if (ivl < 10 || ivl > 3600) {
-    $('#settings-msg').innerHTML = '<p class="msg err">WARN: scan interval must be 10-3600 seconds</p>';
-    setTimeout(() => $('#settings-msg').innerHTML = '', 4000);
+    $('#save-msg').innerHTML = '<p class="msg err">WARN: scan interval must be 10-3600 seconds</p>';
+    setTimeout(() => $('#save-msg').innerHTML = '', 4000);
     return;
   }
   const payload = {api_key:key, scan_interval:ivl};
+  payload.boot_mode = parseInt($('#boot-mode').value) || 0;
   if (pass !== '') payload.web_password = pass;
+  payload.open_wifi_mode = parseInt($('#ow-mode').value) || 0;
+  payload.mqtt_url_last = $('#mqtt-url-last').value.trim();
+  payload.mqtt_url_all = $('#mqtt-url-all').value.trim();
+  payload.mqtt_wait_cycles = parseInt($('#mqtt-wait').value) || 0;
+  payload.mqtt_client_id = $('#mqtt-cid').value.trim();
+  payload.mqtt_username = $('#mqtt-user').value.trim();
+  const mqttPass = $('#mqtt-pass').value;
+  if (mqttPass !== '') payload.mqtt_password = mqttPass;
   const r = await fetch('/api/settings', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify(payload)
   });
-  $('#settings-msg').innerHTML = r.ok
-    ? '<p class="msg ok">CONFIG_SAVED</p>'
-    : '<p class="msg err">WRITE_FAILED</p>';
-  setTimeout(() => $('#settings-msg').innerHTML = '', 3000);
+  const msg = r.ok ? '<p class="msg ok">CONFIG_SAVED</p>' : '<p class="msg err">WRITE_FAILED</p>';
+  $('#save-msg').innerHTML = msg;
+  setTimeout(() => { $('#save-msg').innerHTML = ''; }, 3000);
   if (r.ok) loadSettings();
 }
 
@@ -410,21 +501,66 @@ async function clearPassword() {
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({web_password:''})
   });
-  $('#settings-msg').innerHTML = r.ok
+  $('#save-msg').innerHTML = r.ok
     ? '<p class="msg ok">PASSWORD_CLEARED</p>'
     : '<p class="msg err">CLEAR_FAILED</p>';
-  setTimeout(() => $('#settings-msg').innerHTML = '', 3000);
+  setTimeout(() => $('#save-msg').innerHTML = '', 3000);
   if (r.ok) loadSettings();
+}
+
+async function deleteFromDetail() {
+  if(!confirm('ERASE scan #'+currentDetailId+'?')) return;
+  await fetch('/api/scan?id='+currentDetailId, {method:'DELETE'});
+  showView('scans');
+}
+
+async function deleteFromMap() {
+  if(!confirm('ERASE scan #'+currentMapId+'?')) return;
+  await fetch('/api/scan?id='+currentMapId, {method:'DELETE'});
+  showView('scans');
+}
+
+async function loadBlocklist() {
+  try {
+    const r = await fetch('/api/blocklist');
+    const list = await r.json();
+    if(!list.length) {
+      $('#ow-blocklist').innerHTML = '<span class="info">No entries.</span>';
+      return;
+    }
+    let h = '';
+    list.forEach(ssid => {
+      h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #003b00">
+        <span>${ssid}</span>
+        <button class="danger" onclick="deleteBlocklistEntry('${ssid.replace(/'/g,"\\'")}')">Del</button>
+      </div>`;
+    });
+    h += '<div style="margin-top:6px"><button class="danger" onclick="clearBlocklist()">Purge All</button></div>';
+    $('#ow-blocklist').innerHTML = h;
+  } catch(e) {
+    $('#ow-blocklist').innerHTML = '<span class="info">LOAD_FAILED</span>';
+  }
+}
+
+async function deleteBlocklistEntry(ssid) {
+  await fetch('/api/blocklist?ssid='+encodeURIComponent(ssid), {method:'DELETE'});
+  loadBlocklist();
+}
+
+async function clearBlocklist() {
+  if(!confirm('Clear entire blocklist?')) return;
+  await fetch('/api/blocklist', {method:'DELETE'});
+  loadBlocklist();
 }
 
 async function startScanning() {
   const ivl = $('#scan-interval')?.value || '60';
-  if(!confirm(`ENTER SCAN MODE?\n\nInterval: ${ivl}s\nWiFi will disconnect.\nPress BOOT to return.`)) return;
+  if(!confirm(`ENTER SCAN MODE?\n\nInterval: ${ivl}s\nWiFi will disconnect.\nReset to return to web server.`)) return;
   await fetch('/api/sleep', {method:'POST'});
-  document.body.innerHTML = '<div style="text-align:center;margin-top:80px"><h1 class="glow" style="font-size:1.8em">ENTERING DEEP SLEEP<span class="cursor"></span></h1><p style="color:#008f11;margin-top:16px;letter-spacing:2px">// scanning active &mdash; press BOOT to wake</p></div>';
+  document.body.innerHTML = '<div style="text-align:center;margin-top:80px"><h1 class="glow" style="font-size:1.8em">ENTERING DEEP SLEEP<span class="cursor"></span></h1><p style="color:#008f11;margin-top:16px;letter-spacing:2px">// scanning active &mdash; reset to return</p></div>';
 }
 
-loadScans();
+showView('settings');
 </script>
 </body>
 </html>
