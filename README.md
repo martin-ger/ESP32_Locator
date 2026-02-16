@@ -1,7 +1,8 @@
 # ESP32 Locator
 
 A battery-friendly WiFi reconnaissance and geolocation system for ESP32. 
-Based on the project documentation, here are the six main features of the **ESP32 Locator**:
+
+Main features of the **ESP32 Locator**:
 
 1. **GPS-less Geolocation**: The system determines its position with 10–20 meter accuracy using only WiFi scans and the Google Geolocation API, eliminating the need for a dedicated GPS module.
 2. **On-Device Analysis and Movement Detection**: The software can detect movement without an internet connection by calculating the "DIFFS" (symmetric difference) of MAC addresses between consecutive scans.
@@ -266,7 +267,7 @@ A helper script subscribes to the MQTT topic and saves the message as a JSON fil
 ./mqtt_sub.sh mqtt://broker:1883/locator/last username password ./scans
 ```
 
-The script reads one retained message, wraps single scan objects in an array if needed, and saves to `LocatorScan_<timestamp>.json`. Open the file in `locator.html` via "Import JSON".
+The script reads the retained message and saves ist to `LocatorScan_<timestamp>.json`. Open the file in `locator.html` via "Import JSON". The script requires the Mosquitto client Tools ("mosquitto_sub") to be installed.
 
 ## Local Analyzer (`locator.html`)
 
