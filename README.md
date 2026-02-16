@@ -11,6 +11,8 @@ Main features of the **ESP32 Locator**:
 5. **Flexible Data Management and MQTT Integration**: It supports storing up to 500 scans in non-volatile storage (NVS), exporting data as JSON, and publishing real-time location data to remote MQTT brokers.
 6. **Offline Analysis Tool**: Includes HTML/JS-application for lokal off-device analysis of collected data.
 
+<img src="https://raw.githubusercontent.com/martin-ger/ESP32_Locator/master/UI_location.png">
+
 The tool uses only WiFi, no GPS required. In densly populated areas with any kind of WiFi cells this works with an accuracy of 10-20 meters. It uses WiFi scans
 and the Google GeoLocation API. Moderate use of this API should be free, but you will need your own API key (see below).
 
@@ -55,6 +57,8 @@ From the web UI you can:
 - **Configure MQTT** -- set broker URLs for last scan and all scans (format: `mqtt://broker:port/topic/path`), wait cycles for "publish all", client ID, username, and password
 - **Configure settings** -- set the Google API key, web password (HTTP Basic Auth), scan interval (10--3600 seconds), and default boot mode
 - **Start Scanning** -- triggers deep sleep to begin scan cycles; resets the MQTT publish cycle counter; press the BOOT button to return to web server mode
+
+<img src="https://raw.githubusercontent.com/martin-ger/ESP32_Locator/master/UI_scans.png">
 
 ### Default Boot Mode
 
