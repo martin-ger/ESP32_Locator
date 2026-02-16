@@ -1,6 +1,16 @@
 # ESP32 Locator
 
-A battery-friendly WiFi reconnaissance and geolocation system for ESP32. The tool uses only WiFi, no GPS required. In densly populated areas with any kind of WiFi cells this works with an accuracy of 10-20 meters. It uses WiFi scans
+A battery-friendly WiFi reconnaissance and geolocation system for ESP32. 
+Based on the project documentation, here are the six main features of the **ESP32 Locator**:
+
+1. **GPS-less Geolocation**: The system determines its position with 10–20 meter accuracy using only WiFi scans and the Google Geolocation API, eliminating the need for a dedicated GPS module.
+2. **On-Device Analysis and Movement Detection**: The software can detect movement without an internet connection by calculating the "DIFFS" (symmetric difference) of MAC addresses between consecutive scans.
+3. **Battery-Friendly Operation**: The device is designed for low power consumption, primarily cycling between a deep sleep state and quick WiFi scanning intervals.
+4. **Opportunistic "Hitchhiking" Connectivity**: Through its "Open WiFi Mode," the device can automatically detect, connect to, and bypass captive portals of open networks to sync time via SNTP or upload data.
+5. **Flexible Data Management and MQTT Integration**: It supports storing up to 500 scans in non-volatile storage (NVS), exporting data as JSON, and publishing real-time location data to remote MQTT brokers.
+6. **Offline Analysis Tool**: Includes HTML/JS-application for lokal off-device analysis of collected data.
+
+The tool uses only WiFi, no GPS required. In densly populated areas with any kind of WiFi cells this works with an accuracy of 10-20 meters. It uses WiFi scans
 and the Google GeoLocation API. Moderate use of this API should be free, but you will need your own API key (see below).
 
 The device cycles between deep sleep and WiFi scanning, storing nearby access point data in non-volatile storage. When woken by the boot button (or on first power-up), it serves a web UI for browsing scan results, geolocating scans via Google's API, and viewing positions on an embedded map.
