@@ -7,3 +7,8 @@ CONFIG_ESP_WIFI_SCANLIST_SORT_RSSI=y
 CONFIG_LOG_DEFAULT_LEVEL_WARN=y
 CONFIG_LOG_DEFAULT_LEVEL=2
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Lower brownout threshold for boards with weak voltage regulators (e.g. C3 Super Mini).
+# Level 7 (default) is too sensitive and causes resets during WiFi TX current spikes.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_2=y
+CONFIG_ESP_BROWNOUT_DET_LVL=2

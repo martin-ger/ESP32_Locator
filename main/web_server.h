@@ -13,3 +13,7 @@ httpd_handle_t web_server_start(void);
 
 // Stop the web server.
 void web_server_stop(httpd_handle_t server);
+
+// Start captive portal DNS server (AP mode only).
+// Resolves all DNS queries to 192.168.4.1 so clients stay connected.
+void web_server_start_captive_dns(void);

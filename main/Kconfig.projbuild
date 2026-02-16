@@ -24,19 +24,27 @@ menu "Locator Configuration"
 
     config LOCATOR_BOOT_BUTTON_GPIO
         int "Boot button GPIO number"
-        default 9 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6
+        default 9 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32H2
         default 0
         help
             GPIO number for the boot button used to trigger scan mode from deep sleep.
-            Default is 0 for ESP32/S2/S3, 9 for C2/C3/C6.
+            Default is 0 for ESP32/S2/S3, 9 for C2/C3/C6/H2.
 
     config LOCATOR_LED_GPIO
         int "Board LED GPIO number"
-        default 8 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6
+        default 8 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32H2
         default 2
         help
             GPIO number for the onboard LED.
-            Default is 2 for ESP32/S2/S3, 8 for C2/C3/C6.
+            Default is 2 for ESP32/S2/S3, 8 for C2/C3/C6/H2.
+
+    config LOCATOR_LED_ACTIVE_LOW
+        bool "LED is active-low"
+        default y if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32H2
+        default n
+        help
+            Enable if the onboard LED is active-low (GPIO low = LED on).
+            This is typically the case on ESP32-C3, C6, and similar boards.
 
     config LOCATOR_OPEN_WIFI_ENABLED
         bool "Enable opportunistic open WiFi connection"

@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "soc/soc_caps.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -21,6 +22,14 @@
 #ifdef CONFIG_LOCATOR_OPEN_WIFI_ENABLED
 #include "open_wifi.h"
 #include "mqtt_publish.h"
+#endif
+
+#ifdef CONFIG_LOCATOR_LED_ACTIVE_LOW
+#define LED_ON  0
+#define LED_OFF 1
+#else
+#define LED_ON  1
+#define LED_OFF 0
 #endif
 
 static const char *TAG = "locator";
@@ -49,6 +58,40 @@ static void start_mdns_service() {
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
 }
 
+#if !SOC_PM_SUPPORT_EXT0_WAKEUP
+/* On chips where the boot button GPIO can't wake from deep sleep (C3/C6/…),
+   flash the LED for 3 s after boot and sample the button.  Returns true if
+   the button is held down → caller should enter web-server mode. */
+static bool check_boot_button(void)
+{
+    gpio_config_t btn_conf = {
+        .pin_bit_mask = (1ULL << CONFIG_LOCATOR_BOOT_BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    };
+    gpio_config(&btn_conf);
+
+    gpio_config_t led_conf = {
+        .pin_bit_mask = (1ULL << CONFIG_LOCATOR_LED_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&led_conf);
+    gpio_set_level(CONFIG_LOCATOR_LED_GPIO, LED_ON);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    bool pressed = (gpio_get_level(CONFIG_LOCATOR_BOOT_BUTTON_GPIO) == 0);
+
+    gpio_set_level(CONFIG_LOCATOR_LED_GPIO, LED_OFF);
+
+    if (pressed) {
+        ESP_LOGI(TAG, "Boot button held — entering web server mode");
+    }
+    return pressed;
+}
+#endif
+
 static void enter_deep_sleep(void)
 {
     // NVS must be initialized before calling this
@@ -59,9 +102,13 @@ static void enter_deep_sleep(void)
              interval, CONFIG_LOCATOR_BOOT_BUTTON_GPIO);
 
     esp_sleep_enable_timer_wakeup((uint64_t)interval * 1000000ULL);
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
     esp_sleep_enable_ext0_wakeup(CONFIG_LOCATOR_BOOT_BUTTON_GPIO, 0);
     rtc_gpio_pullup_en(CONFIG_LOCATOR_BOOT_BUTTON_GPIO);
     rtc_gpio_pulldown_dis(CONFIG_LOCATOR_BOOT_BUTTON_GPIO);
+#endif
+    /* On chips without EXT0 (C3/C6/…) we don't register a GPIO wakeup source;
+       instead check_boot_button() polls the pin after every wakeup. */
 
     ESP_LOGI(TAG, "Entering deep sleep...");
     esp_deep_sleep_start();
@@ -107,7 +154,7 @@ static void run_scan_mode(void)
             .mode = GPIO_MODE_OUTPUT,
         };
         gpio_config(&led_conf);
-        gpio_set_level(CONFIG_LOCATOR_LED_GPIO, 1);
+        gpio_set_level(CONFIG_LOCATOR_LED_GPIO, LED_ON);
 
         bool wifi_done = false;
 
@@ -172,7 +219,7 @@ static void run_scan_mode(void)
             }
         }
 
-        gpio_set_level(CONFIG_LOCATOR_LED_GPIO, 0);
+        gpio_set_level(CONFIG_LOCATOR_LED_GPIO, LED_OFF);
     }
 #endif
 
@@ -241,6 +288,7 @@ static void run_web_server_mode(void)
         start_mdns_service();
     } else {
         ESP_LOGI(TAG, "AP mode — connect to 'ESP32_Locator' WiFi, open http://192.168.4.1");
+        web_server_start_captive_dns();
     }
 
     // Start web server (works in both STA and AP modes)
@@ -254,7 +302,7 @@ static void run_web_server_mode(void)
         .mode = GPIO_MODE_OUTPUT,
     };
     gpio_config(&led_conf);
-    gpio_set_level(CONFIG_LOCATOR_LED_GPIO, 1);
+    gpio_set_level(CONFIG_LOCATOR_LED_GPIO, LED_ON);
 
     if (mode == WIFI_CONN_MODE_STA) {
         // Register reconnect handlers (STA only)
@@ -307,6 +355,12 @@ void app_main(void)
 
         case ESP_SLEEP_WAKEUP_UNDEFINED:
         default:
+#if !SOC_PM_SUPPORT_EXT0_WAKEUP
+            if (check_boot_button()) {
+                run_web_server_mode();
+                break;
+            }
+#endif
             if (scan_store_get_boot_mode() == BOOT_MODE_SCAN) {
                 ESP_LOGI(TAG, "Wakeup: POWER ON / RESET -> scan mode (configured)");
                 run_scan_mode();

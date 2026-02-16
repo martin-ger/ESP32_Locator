@@ -59,16 +59,18 @@ From the web UI you can:
 
 On power-on or reset, the device enters web server mode by default. This can be changed in the Config page under **DEFAULT_BOOT_MODE**:
 
-- **Web Server** (default) -- power-on starts the web server
+- **Web Server** (default) -- power-on starts the web server, in the local network you can reach the Locator via **http://locator.local** using mDNS in most environments
 - **Scan Mode** -- power-on enters scan mode immediately, useful for battery-powered deployments where the device should start scanning without manual intervention
 
-Pressing the BOOT button during deep sleep always enters web server mode, regardless of this setting. Timer wakeup always enters scan mode.
+On ESP32 pressing the BOOT button during deep sleep always enters web server mode, regardless of this setting. Timer wakeup always enters scan mode.
+
+On ESP32-Cx the BOOT cannot directly wake up the CPU. Instead you have to reset the ESP. If in Web Server mode you are done. If in Scan mode, you have to press BOOT within 3 sec after reset to enter the Web Server mode again.
 
 ### First Boot (or after "Forget")
 
 1. The device starts a SoftAP named **ESP32_Locator** (open, no password)
 2. Connect your phone or laptop to this network
-3. Open **http://192.168.4.1** in a browser
+3. Wait for captive portal or open **http://192.168.4.1** in a browser
 4. Go to the **Config** page
 5. Click **Scan** to list nearby WiFi networks
 6. Select your network, enter the password, and click **Connect**
